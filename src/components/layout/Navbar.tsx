@@ -1,10 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import { useApp } from "@/lib/context/AppContext";
-import { Bell, Search, Moon, Sun, Menu, Settings, LogOut, CheckCheck, Trash2, User } from "lucide-react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { useApp } from "@/lib/context/AppContext";
+import { useAuth } from "@/lib/context/AuthContext";
+import { Bell, Search, Moon, Sun, Menu, Settings, LogOut, CheckCheck, Trash2 } from "lucide-react";
+import Link from "next/link";
 import { toast } from "sonner";
 
 interface NavbarProps {
@@ -13,11 +14,10 @@ interface NavbarProps {
 
 export default function Navbar({ setIsOpenMobile }: NavbarProps) {
   const router = useRouter();
+  const { logout, user } = useAuth();
   const { 
     theme, 
     toggleTheme, 
-    searchQuery, 
-    setSearchQuery, 
     notifications, 
     markNotificationAsRead, 
     markAllNotificationsAsRead, 
@@ -25,13 +25,16 @@ export default function Navbar({ setIsOpenMobile }: NavbarProps) {
     clearAllNotifications
   } = useApp();
 
+  const [searchQuery, setSearchQuery] = useState("");
   const [showNotifications, setShowNotifications] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
 
   const unreadCount = notifications.filter(n => !n.read).length;
 
   const handleLogout = () => {
-    toast.error("Logged out successfully (frontend simulation).");
+    logout();
+    toast.success("Logged out successfully.");
+    router.push("/login");
   };
 
   return (
@@ -167,8 +170,12 @@ export default function Navbar({ setIsOpenMobile }: NavbarProps) {
             className="flex items-center gap-3 cursor-pointer group"
           >
             <div className="text-right hidden sm:block">
-              <div className="text-sm font-semibold text-slate-700 dark:text-slate-300 group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">Admin User</div>
-              <div className="text-xs text-slate-500 dark:text-slate-400">Gym Manager</div>
+              <div className="text-sm font-semibold text-slate-700 dark:text-slate-300 group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
+                {user?.name ?? "Admin User"}
+              </div>
+              <div className="text-xs text-slate-500 dark:text-slate-400">
+                {user?.gymName ?? user?.role ?? "Gym Owner"}
+              </div>
             </div>
             <img
               className="h-9 w-9 rounded-full object-cover border-2 border-slate-100 dark:border-slate-800"

@@ -3,6 +3,7 @@
 import { useState } from "react";
 import Sidebar from "@/components/layout/Sidebar";
 import Navbar from "@/components/layout/Navbar";
+import AuthGuard from "@/components/auth/AuthGuard";
 import clsx from "clsx";
 
 export default function DashboardLayout({
@@ -14,6 +15,7 @@ export default function DashboardLayout({
   const [isCollapsed, setIsCollapsed] = useState(false);
 
   return (
+    <AuthGuard>
     <div className="flex h-screen overflow-hidden bg-slate-50 dark:bg-slate-950 font-sans text-slate-800 dark:text-slate-100 transition-colors">
       <Sidebar 
         isOpenMobile={isOpenMobile} 
@@ -33,5 +35,6 @@ export default function DashboardLayout({
         </main>
       </div>
     </div>
+    </AuthGuard>
   );
 }

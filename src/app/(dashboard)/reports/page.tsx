@@ -3,26 +3,50 @@
 import { useApp } from "@/lib/context/AppContext";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
-import { BarChart3, TrendingUp, Users, DollarSign, Calendar, Download, RefreshCw, Star, CreditCard } from "lucide-react";
+import { formatCurrency, formatIndianNumber } from "@/lib/utils";
+import { BarChart3, TrendingUp, TrendingDown, Users, Calendar, Download, RefreshCw, Star, CreditCard, Receipt, Dumbbell } from "lucide-react";
 import { toast } from "sonner";
 
 export default function ReportsPage() {
-  const { members, trainers, payments, attendance, plans, settings } = useApp();
+  const { members, trainers, payments, expenses, attendance, plans, settings } = useApp();
 
-  // 1. Calculations
+  // 1. Financial & Member Calculations
   const newMembersCount = members.length;
-  const netRevenue = payments.reduce((acc, p) => p.status === "Paid" ? acc + p.amount : acc, 0);
-  const avgAttendance = attendance.length > 0 ? Math.round(attendance.filter(a => a.status === "Present").length / Array.from(new Set(attendance.map(a => a.date))).length) : 0;
+  
+  const totalRevenue = payments
+    .filter((p) => p.status === "Paid")
+    .reduce((acc, p) => acc + p.amount, 0);
+
+  const membershipRevenue = payments
+    .filter((p) => p.status === "Paid")
+    .reduce((acc, p) => acc + (p.membershipAmount !== undefined ? p.membershipAmount : p.amount), 0);
+
+  const ptRevenue = payments
+    .filter((p) => p.status === "Paid")
+    .reduce((acc, p) => acc + (p.ptAmount || 0), 0);
+
+  const totalExpenses = expenses.reduce((acc, e) => acc + e.amount, 0);
+  const netProfit = totalRevenue - totalExpenses;
+
+  const avgAttendance = attendance.length > 0
+    ? Math.round(attendance.filter((a) => a.status === "Present").length / (Array.from(new Set(attendance.map((a) => a.date))).length || 1))
+    : 0;
   
   // Trainer performance data (clients assigned)
-  const trainerData = trainers.map(t => {
-    const clients = members.filter(m => m.trainerId === t.id).length;
-    return { name: t.name, clients };
+  const trainerData = trainers.map((t) => {
+    const clients = members.filter((m) => m.trainerId === t.id).length;
+    return { name: t.name, type: t.trainerType, clients, ptCharges: t.ptCharges };
   });
 
   // Payment Analytics (method distribution)
   const methodCounts = payments.reduce((acc: Record<string, number>, p) => {
     acc[p.method] = (acc[p.method] || 0) + p.amount;
+    return acc;
+  }, {});
+
+  // Expense by Category distribution
+  const expenseCategoryCounts = expenses.reduce((acc: Record<string, number>, e) => {
+    acc[e.category] = (acc[e.category] || 0) + e.amount;
     return acc;
   }, {});
 
@@ -38,30 +62,37 @@ export default function ReportsPage() {
   };
 
   const handleExportCSV = () => {
-    let csv = "Report,Gymation Analytics Summary\n";
+    let csv = "Report,Gymation Financial & Operations Summary\n";
     csv += `Total New Members,${newMembersCount}\n`;
-    csv += `Net Revenue,${settings.currency}${netRevenue}\n`;
+    csv += `Total Revenue,${formatCurrency(totalRevenue)}\n`;
+    csv += `Membership Revenue,${formatCurrency(membershipRevenue)}\n`;
+    csv += `PT Revenue,${formatCurrency(ptRevenue)}\n`;
+    csv += `Total Expenses,${formatCurrency(totalExpenses)}\n`;
+    csv += `Net Profit,${formatCurrency(netProfit)}\n`;
     csv += `Avg Daily Attendance,${avgAttendance}\n\n`;
-    csv += "Trainer Performance:\nTrainer Name,Assigned Clients\n";
-    trainerData.forEach(t => {
-      csv += `"${t.name}",${t.clients}\n`;
+    csv += "Trainer Performance:\nTrainer Name,Role,Assigned Clients,PT Charges (INR)\n";
+    trainerData.forEach((t) => {
+      csv += `"${t.name}","${t.type}",${t.clients},${t.ptCharges}\n`;
     });
     triggerDownload("Gymation_Report.csv", csv, "text/csv");
   };
 
   const handleExportExcel = () => {
-    // Excel XML mock or tab-delimited file
     let excel = "Gymation Analytics Summary Report\r\n";
     excel += `Date Created: \t${new Date().toLocaleDateString()}\r\n\r\n`;
     excel += `Metric\tValue\r\n`;
-    excel += `Net Revenue\t${settings.currency}${netRevenue}\r\n`;
+    excel += `Total Revenue\t${formatCurrency(totalRevenue)}\r\n`;
+    excel += `Membership Revenue\t${formatCurrency(membershipRevenue)}\r\n`;
+    excel += `PT Revenue\t${formatCurrency(ptRevenue)}\r\n`;
+    excel += `Total Expenses\t${formatCurrency(totalExpenses)}\r\n`;
+    excel += `Net Profit\t${formatCurrency(netProfit)}\r\n`;
     excel += `New Members\t${newMembersCount}\r\n`;
     excel += `Daily Active\t${avgAttendance}\r\n`;
     triggerDownload("Gymation_Report.xls", excel, "application/vnd.ms-excel");
   };
 
   const handleExportPDF = () => {
-    toast.success("Preparing PDF document... (Bi-printing simulation)");
+    toast.success("Preparing PDF document... (Print simulation)");
     window.print();
   };
 
@@ -70,7 +101,9 @@ export default function ReportsPage() {
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
           <h1 className="text-2xl font-bold text-slate-800 dark:text-slate-100 tracking-tight">Reports & Analytics</h1>
-          <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">Detailed real-time insights into your gym's key metrics.</p>
+          <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
+            Detailed financial summary, revenue vs expenses, net profit, and operations metrics in INR (₹).
+          </p>
         </div>
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" className="gap-1.5 text-xs dark:border-slate-850 dark:text-slate-350" onClick={handleExportCSV}>
@@ -85,107 +118,146 @@ export default function ReportsPage() {
         </div>
       </div>
 
-      {/* Metrics Cards */}
+      {/* Financial Summary & Core Metrics Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <Card className="dark:bg-slate-900 dark:border-slate-800">
           <CardContent className="p-5 flex items-center gap-4">
             <div className="p-3 bg-blue-100 dark:bg-blue-950 text-blue-600 dark:text-blue-400 rounded-xl">
-              <Users size={24} />
+              <CreditCard size={24} />
             </div>
             <div>
-              <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide">New Member Registrations</p>
-              <h4 className="text-2xl font-bold text-slate-800 dark:text-white mt-1">{newMembersCount}</h4>
-              <p className="text-[10px] text-green-600 dark:text-green-400 flex items-center mt-1 font-semibold">
-                <TrendingUp size={12} className="mr-1" /> +100% (Real time)
+              <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Total Revenue</p>
+              <h4 className="text-2xl font-bold text-slate-800 dark:text-white mt-1">
+                {formatCurrency(totalRevenue)}
+              </h4>
+              <p className="text-[10px] text-blue-600 dark:text-blue-400 flex items-center mt-1 font-semibold">
+                Membership + PT combined
               </p>
             </div>
           </CardContent>
         </Card>
-        <Card className="dark:bg-slate-900 dark:border-slate-800">
-          <CardContent className="p-5 flex items-center gap-4">
-            <div className="p-3 bg-emerald-100 dark:bg-emerald-950 text-emerald-600 dark:text-emerald-400 rounded-xl">
-              <DollarSign size={24} />
-            </div>
-            <div>
-              <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Net Revenue Generated</p>
-              <h4 className="text-2xl font-bold text-slate-800 dark:text-white mt-1">{settings.currency}{netRevenue.toLocaleString()}</h4>
-              <p className="text-[10px] text-green-600 dark:text-green-400 flex items-center mt-1 font-semibold">
-                <TrendingUp size={12} className="mr-1" /> Revenue streaming active
-              </p>
-            </div>
-          </CardContent>
-        </Card>
-        <Card className="dark:bg-slate-900 dark:border-slate-800">
-          <CardContent className="p-5 flex items-center gap-4">
-            <div className="p-3 bg-indigo-100 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400 rounded-xl">
-              <BarChart3 size={24} />
-            </div>
-            <div>
-              <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Avg Daily Attendance</p>
-              <h4 className="text-2xl font-bold text-slate-800 dark:text-white mt-1">{avgAttendance}</h4>
-              <p className="text-[10px] text-green-600 dark:text-green-400 flex items-center mt-1 font-semibold">
-                <TrendingUp size={12} className="mr-1" /> rollcall verified
-              </p>
-            </div>
-          </CardContent>
-        </Card>
+
         <Card className="dark:bg-slate-900 dark:border-slate-800">
           <CardContent className="p-5 flex items-center gap-4">
             <div className="p-3 bg-rose-100 dark:bg-rose-950 text-rose-600 dark:text-rose-400 rounded-xl">
-              <Star size={24} />
+              <Receipt size={24} />
             </div>
             <div>
-              <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Fitness Coaches</p>
-              <h4 className="text-2xl font-bold text-slate-800 dark:text-white mt-1">{trainers.length}</h4>
-              <p className="text-[10px] text-slate-400 flex items-center mt-1 font-semibold">
-                Client assignments ready
+              <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Total Expenses</p>
+              <h4 className="text-2xl font-bold text-slate-800 dark:text-white mt-1">
+                {formatCurrency(totalExpenses)}
+              </h4>
+              <p className="text-[10px] text-rose-600 dark:text-rose-400 flex items-center mt-1 font-semibold">
+                {expenses.length} expense transactions
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="dark:bg-slate-900 dark:border-slate-800">
+          <CardContent className="p-5 flex items-center gap-4">
+            <div className={`p-3 rounded-xl ${netProfit >= 0 ? "bg-emerald-100 dark:bg-emerald-950 text-emerald-600 dark:text-emerald-400" : "bg-red-100 dark:bg-red-950 text-red-600 dark:text-red-400"}`}>
+              {netProfit >= 0 ? <TrendingUp size={24} /> : <TrendingDown size={24} />}
+            </div>
+            <div>
+              <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Net Profit</p>
+              <h4 className={`text-2xl font-bold mt-1 ${netProfit >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}`}>
+                {formatCurrency(netProfit)}
+              </h4>
+              <p className="text-[10px] text-slate-400 mt-1 font-semibold">
+                Revenue - Expenses
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="dark:bg-slate-900 dark:border-slate-800">
+          <CardContent className="p-5 flex items-center gap-4">
+            <div className="p-3 bg-indigo-100 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400 rounded-xl">
+              <Users size={24} />
+            </div>
+            <div>
+              <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Total Gym Members</p>
+              <h4 className="text-2xl font-bold text-slate-800 dark:text-white mt-1">{newMembersCount}</h4>
+              <p className="text-[10px] text-indigo-600 dark:text-indigo-400 flex items-center mt-1 font-semibold">
+                {avgAttendance} avg daily visits
               </p>
             </div>
           </CardContent>
         </Card>
       </div>
 
-      {/* Charts Grid */}
+      {/* Revenue Breakdown: Base Membership vs PT Fees */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Payment Analytics bar list */}
         <Card className="dark:bg-slate-900 dark:border-slate-800">
           <CardHeader>
-            <CardTitle className="dark:text-slate-100">Revenue Contribution by Method</CardTitle>
+            <CardTitle className="dark:text-slate-100">Revenue Stream Composition</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            {Object.entries(methodCounts).map(([method, amt]) => {
-              const pct = netRevenue > 0 ? Math.round((amt / netRevenue) * 100) : 0;
+            <div className="space-y-1.5">
+              <div className="flex justify-between text-xs font-bold text-slate-700 dark:text-slate-300">
+                <span className="flex items-center gap-1.5"><CreditCard size={14} className="text-blue-500" /> Membership Subscriptions</span>
+                <span>{formatCurrency(membershipRevenue)} ({totalRevenue > 0 ? Math.round((membershipRevenue / totalRevenue) * 100) : 0}%)</span>
+              </div>
+              <div className="h-2.5 w-full bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
+                <div className="h-full bg-blue-500 rounded-full" style={{ width: `${totalRevenue > 0 ? (membershipRevenue / totalRevenue) * 100 : 0}%` }}></div>
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <div className="flex justify-between text-xs font-bold text-slate-700 dark:text-slate-300">
+                <span className="flex items-center gap-1.5"><Dumbbell size={14} className="text-purple-500" /> Personal Training (PT) Charges</span>
+                <span>{formatCurrency(ptRevenue)} ({totalRevenue > 0 ? Math.round((ptRevenue / totalRevenue) * 100) : 0}%)</span>
+              </div>
+              <div className="h-2.5 w-full bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
+                <div className="h-full bg-purple-500 rounded-full" style={{ width: `${totalRevenue > 0 ? (ptRevenue / totalRevenue) * 100 : 0}%` }}></div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Expenses by Category */}
+        <Card className="dark:bg-slate-900 dark:border-slate-800">
+          <CardHeader>
+            <CardTitle className="dark:text-slate-100">Expenses by Category</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {Object.entries(expenseCategoryCounts).slice(0, 4).map(([category, amt]) => {
+              const pct = totalExpenses > 0 ? Math.round((amt / totalExpenses) * 100) : 0;
               return (
-                <div key={method} className="space-y-1.5">
-                  <div className="flex justify-between text-xs font-bold text-slate-650 dark:text-slate-350">
-                    <span>{method}</span>
-                    <span>{settings.currency}{amt} ({pct}%)</span>
+                <div key={category} className="space-y-1">
+                  <div className="flex justify-between text-xs font-bold text-slate-700 dark:text-slate-300">
+                    <span>{category}</span>
+                    <span>{formatCurrency(amt)} ({pct}%)</span>
                   </div>
                   <div className="h-2 w-full bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
-                    <div className="h-full bg-blue-500 rounded-full" style={{ width: `${pct}%` }}></div>
+                    <div className="h-full bg-rose-500 rounded-full" style={{ width: `${pct}%` }}></div>
                   </div>
                 </div>
               );
             })}
-            {Object.keys(methodCounts).length === 0 && (
-              <p className="text-slate-400 text-xs py-6 text-center">No payment transactions recorded.</p>
+            {Object.keys(expenseCategoryCounts).length === 0 && (
+              <p className="text-slate-400 text-xs py-6 text-center">No expense items recorded.</p>
             )}
           </CardContent>
         </Card>
+      </div>
 
-        {/* Trainer Performance clients counts */}
+      {/* Additional Charts Grid */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Payment Analytics bar list */}
         <Card className="dark:bg-slate-900 dark:border-slate-800">
           <CardHeader>
-            <CardTitle className="dark:text-slate-100">Coach Performance (Assigned Clients)</CardTitle>
+            <CardTitle className="dark:text-slate-100">Revenue Contribution by Payment Method</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            {trainerData.map((t) => {
-              const pct = members.length > 0 ? Math.round((t.clients / members.length) * 100) : 0;
+            {Object.entries(methodCounts).map(([method, amt]) => {
+              const pct = totalRevenue > 0 ? Math.round((amt / totalRevenue) * 100) : 0;
               return (
-                <div key={t.name} className="space-y-1.5">
-                  <div className="flex justify-between text-xs font-bold text-slate-650 dark:text-slate-355">
-                    <span>{t.name}</span>
-                    <span>{t.clients} Clients ({pct}%)</span>
+                <div key={method} className="space-y-1.5">
+                  <div className="flex justify-between text-xs font-bold text-slate-650 dark:text-slate-350">
+                    <span>{method}</span>
+                    <span>{formatCurrency(amt)} ({pct}%)</span>
                   </div>
                   <div className="h-2 w-full bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
                     <div className="h-full bg-emerald-500 rounded-full" style={{ width: `${pct}%` }}></div>
@@ -193,26 +265,22 @@ export default function ReportsPage() {
                 </div>
               );
             })}
-            {trainerData.length === 0 && (
-              <p className="text-slate-400 text-xs py-6 text-center">No coaches onboarded.</p>
-            )}
           </CardContent>
         </Card>
 
-        {/* Plan subscriptions distribution */}
+        {/* Trainer Performance clients counts */}
         <Card className="dark:bg-slate-900 dark:border-slate-800">
           <CardHeader>
-            <CardTitle className="dark:text-slate-100">Membership Subscription Splits</CardTitle>
+            <CardTitle className="dark:text-slate-100">Coach Client Roster Distribution</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            {plans.map(p => {
-              const clients = members.filter(m => m.planId === p.id).length;
-              const pct = members.length > 0 ? Math.round((clients / members.length) * 100) : 0;
+            {trainerData.map((t) => {
+              const pct = members.length > 0 ? Math.round((t.clients / members.length) * 100) : 0;
               return (
-                <div key={p.id} className="space-y-1.5">
-                  <div className="flex justify-between text-xs font-bold text-slate-650 dark:text-slate-350">
-                    <span>{p.name}</span>
-                    <span>{clients} Subscribers ({pct}%)</span>
+                <div key={t.name} className="space-y-1.5">
+                  <div className="flex justify-between text-xs font-bold text-slate-650 dark:text-slate-355">
+                    <span>{t.name} ({t.type || "Trainer"})</span>
+                    <span>{t.clients} Clients ({pct}%)</span>
                   </div>
                   <div className="h-2 w-full bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
                     <div className="h-full bg-indigo-500 rounded-full" style={{ width: `${pct}%` }}></div>
@@ -220,25 +288,6 @@ export default function ReportsPage() {
                 </div>
               );
             })}
-          </CardContent>
-        </Card>
-
-        {/* Attendance trends */}
-        <Card className="dark:bg-slate-900 dark:border-slate-800">
-          <CardHeader>
-            <CardTitle className="dark:text-slate-100">Monthly Attendance Logs</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="h-40 flex items-end justify-between gap-1.5 pb-4">
-              {[30, 45, 55, 60, 50, 75, 80, 70, 95, 85].map((h, i) => (
-                <div key={i} className="w-full bg-blue-100 dark:bg-blue-950/20 rounded-t-sm hover:bg-blue-200 transition-colors relative group" style={{ height: `${h}%` }}>
-                  <div className="absolute inset-x-0 bottom-0 bg-blue-500 rounded-t-sm w-full transition-all group-hover:opacity-90" style={{ height: `${h}%` }}></div>
-                </div>
-              ))}
-            </div>
-            <div className="flex justify-between text-[10px] font-semibold text-slate-450 border-t border-slate-100 dark:border-slate-800 pt-3">
-              <span>Week 1</span><span>Week 2</span><span>Week 3</span><span>Week 4</span>
-            </div>
           </CardContent>
         </Card>
       </div>

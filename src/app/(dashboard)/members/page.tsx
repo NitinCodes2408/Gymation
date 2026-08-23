@@ -6,13 +6,15 @@ import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/Table";
 import { Badge } from "@/components/ui/Badge";
-import { Search, Plus, Download, Filter, Eye, Edit, Trash2, Users } from "lucide-react";
+import { Search, Plus, Download, Filter, Eye, Edit, Trash2, Users, CreditCard } from "lucide-react";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Modal } from "@/components/ui/Modal";
+import { formatCurrency, formatIndianNumber } from "@/lib/utils";
 import { toast } from "sonner";
+import Link from "next/link";
 
 export default function MembersPage() {
-  const { members, deleteMember, updateMember, addMember, plans, trainers, settings } = useApp();
+  const { members, deleteMember, updateMember, addMember, addPayment, plans, trainers, settings, attendance } = useApp();
   
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
@@ -30,14 +32,40 @@ export default function MembersPage() {
 
   // Form states
   const [formData, setFormData] = useState({
-    name: "", mobile: "", email: "", gender: "male", dob: "", address: "", 
-    emergencyContact: "", planId: "", trainerId: "", status: "Active" as Member["status"], notes: ""
+    name: "",
+    mobile: "",
+    email: "",
+    gender: "male",
+    dob: "",
+    address: "", 
+    emergencyContact: "",
+    planId: "",
+    trainerId: "",
+    status: "Active" as Member["status"],
+    notes: ""
   });
+
+  const selectedPlan = plans.find((p) => p.id === formData.planId) || plans[0];
+  const selectedTrainer = trainers.find((t) => t.id === formData.trainerId);
+  const membershipFee = selectedPlan ? selectedPlan.price : 0;
+  const ptFee = selectedTrainer
+    ? (selectedTrainer.trainerType === "General Trainer" ? 0 : (selectedTrainer.ptCharges || 0))
+    : 0;
+  const totalFee = membershipFee + ptFee;
 
   const handleOpenAdd = () => {
     setFormData({
-      name: "", mobile: "", email: "", gender: "male", dob: "", address: "", 
-      emergencyContact: "", planId: plans[0]?.id || "", trainerId: "", status: "Active", notes: ""
+      name: "",
+      mobile: "",
+      email: "",
+      gender: "male",
+      dob: "",
+      address: "", 
+      emergencyContact: "",
+      planId: plans[0]?.id || "",
+      trainerId: "",
+      status: "Active",
+      notes: ""
     });
     setIsAddOpen(true);
   };
@@ -61,10 +89,12 @@ export default function MembersPage() {
 
   const handleAddSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const plan = plans.find(p => p.id === formData.planId);
+    const plan = plans.find(p => p.id === formData.planId) || plans[0];
     const duration = plan ? plan.durationMonths : 1;
     const expiry = new Date();
     expiry.setMonth(expiry.getMonth() + duration);
+
+    const newMemberId = `M-${Math.floor(1000 + Math.random() * 9000)}`;
 
     addMember({
       name: formData.name,
@@ -74,7 +104,7 @@ export default function MembersPage() {
       dob: formData.dob,
       address: formData.address,
       emergencyContact: formData.emergencyContact,
-      planId: formData.planId,
+      planId: formData.planId || plans[0]?.id || "",
       trainerId: formData.trainerId,
       joinDate: new Date().toISOString().split("T")[0],
       expiryDate: expiry.toISOString().split("T")[0],
@@ -82,6 +112,23 @@ export default function MembersPage() {
       photo: "https://images.unsplash.com/photo-1534438327276-14e5300c3a48?w=256&h=256&q=80",
       notes: formData.notes
     });
+
+    if (plan) {
+      addPayment({
+        memberId: newMemberId,
+        memberName: formData.name,
+        planId: plan.id,
+        planName: plan.name,
+        membershipAmount: membershipFee,
+        ptAmount: ptFee,
+        amount: totalFee,
+        date: new Date().toISOString().split("T")[0],
+        method: "Cash",
+        status: "Paid",
+        notes: `Registration payment: Plan (${formatCurrency(membershipFee)}) + PT (${formatCurrency(ptFee)})`
+      });
+    }
+
     setIsAddOpen(false);
   };
 
@@ -156,7 +203,7 @@ export default function MembersPage() {
   };
 
   return (
-    <div className="space-y-6 max-w-7xl mx-auto">
+    <div className="space-y-6 max-w-7xl mx-auto pb-10">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
           <h1 className="text-2xl font-bold text-slate-800 dark:text-slate-100 tracking-tight">Members</h1>
@@ -167,10 +214,12 @@ export default function MembersPage() {
             <Download size={16} />
             Export CSV
           </Button>
-          <Button onClick={handleOpenAdd} className="gap-2 bg-blue-600 hover:bg-blue-700 text-white">
-            <Plus size={16} />
-            Add Member
-          </Button>
+          <Link href="/members/add">
+            <Button className="gap-2 bg-blue-600 hover:bg-blue-700 text-white">
+              <Plus size={16} />
+              Add Member
+            </Button>
+          </Link>
         </div>
       </div>
 
@@ -325,71 +374,92 @@ export default function MembersPage() {
 
       {/* View Member Profile Modal */}
       <Modal isOpen={viewMember !== null} onClose={() => setViewMember(null)} title="Member Profile File">
-        {viewMember && (
-          <div className="space-y-6">
-            <div className="flex items-center gap-4 border-b border-slate-100 dark:border-slate-800 pb-4">
-              <img src={viewMember.photo} alt={viewMember.name} className="w-16 h-16 rounded-full object-cover border-2 border-blue-500 shadow-md" />
-              <div>
-                <h3 className="text-lg font-bold text-slate-900 dark:text-white">{viewMember.name}</h3>
-                <p className="text-sm text-slate-500 font-mono">{viewMember.id}</p>
-                <Badge variant={viewMember.status === "Active" ? "success" : "danger"} className="mt-1">
-                  {viewMember.status}
-                </Badge>
+        {viewMember && (() => {
+          const t = trainers.find(trainer => trainer.id === viewMember.trainerId);
+          return (
+            <div className="space-y-6">
+              <div className="flex items-center gap-4 border-b border-slate-100 dark:border-slate-800 pb-4">
+                <img src={viewMember.photo} alt={viewMember.name} className="w-16 h-16 rounded-full object-cover border-2 border-blue-500 shadow-md" />
+                <div>
+                  <h3 className="text-lg font-bold text-slate-900 dark:text-white">{viewMember.name}</h3>
+                  <p className="text-sm text-slate-500 font-mono">{viewMember.id}</p>
+                  <Badge variant={viewMember.status === "Active" ? "success" : "danger"} className="mt-1">
+                    {viewMember.status}
+                  </Badge>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4 text-sm">
+                <div>
+                  <p className="text-xs font-bold text-slate-400 uppercase tracking-wide">Mobile Phone</p>
+                  <p className="text-slate-800 dark:text-slate-200 mt-0.5">{viewMember.mobile}</p>
+                </div>
+                <div>
+                  <p className="text-xs font-bold text-slate-400 uppercase tracking-wide">Email Address</p>
+                  <p className="text-slate-800 dark:text-slate-200 mt-0.5">{viewMember.email || "N/A"}</p>
+                </div>
+                <div>
+                  <p className="text-xs font-bold text-slate-400 uppercase tracking-wide">Assigned Trainer</p>
+                  <p className="text-slate-800 dark:text-slate-200 mt-0.5 font-medium">
+                    {t ? `${t.name} (${t.trainerType || "Personal Trainer"})` : "No trainer assigned"}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs font-bold text-slate-400 uppercase tracking-wide">PT Charges</p>
+                  <p className="text-purple-600 dark:text-purple-400 mt-0.5 font-bold">
+                    {t && t.trainerType === "Personal Trainer" ? `${formatCurrency(t.ptCharges)}/${t.ptChargeType || "Month"}` : "None (₹0)"}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs font-bold text-slate-400 uppercase tracking-wide">Plan Subscription</p>
+                  <p className="text-slate-800 dark:text-slate-200 mt-0.5">
+                    {plans.find(p => p.id === viewMember.planId)?.name || "N/A"}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs font-bold text-slate-400 uppercase tracking-wide">Membership Expiry</p>
+                  <p className="text-slate-800 dark:text-slate-200 mt-0.5">{viewMember.expiryDate}</p>
+                </div>
+              </div>
+
+              <div className="text-sm">
+                <p className="text-xs font-bold text-slate-400 uppercase tracking-wide">Address</p>
+                <p className="text-slate-800 dark:text-slate-200 mt-0.5">{viewMember.address || "No address added"}</p>
+              </div>
+
+              <div className="text-sm">
+                <p className="text-xs font-bold text-slate-400 uppercase tracking-wide">Emergency contact</p>
+                <p className="text-slate-800 dark:text-slate-200 mt-0.5">{viewMember.emergencyContact || "None"}</p>
+              </div>
+
+              {viewMember.notes && (
+                <div className="bg-slate-50 dark:bg-slate-800/50 p-3 rounded-xl text-xs text-slate-600 dark:text-slate-400">
+                  <strong>Internal Notes:</strong> {viewMember.notes}
+                </div>
+              )}
+
+              {/* Attendance & Progress Summary */}
+              <div className="grid grid-cols-2 gap-4 border-t border-slate-100 dark:border-slate-800 pt-4 text-xs">
+                <div className="bg-slate-50 dark:bg-slate-800/30 p-3 rounded-xl border border-slate-100 dark:border-slate-800">
+                  <p className="font-bold text-slate-400 uppercase tracking-wide">Attendance Summary</p>
+                  <p className="text-slate-800 dark:text-slate-200 mt-1 font-semibold">
+                    Checked-in: {attendance.filter(a => a.memberId === viewMember.id && a.status === "Present").length} days
+                  </p>
+                </div>
+                <div className="bg-slate-50 dark:bg-slate-800/30 p-3 rounded-xl border border-slate-100 dark:border-slate-800">
+                  <p className="font-bold text-slate-400 uppercase tracking-wide">Plan Type</p>
+                  <p className="text-slate-800 dark:text-slate-200 mt-1 font-semibold">
+                    {plans.find(p => p.id === viewMember.planId)?.name || "Standard"}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex justify-end pt-2">
+                <Button onClick={() => setViewMember(null)}>Close Profile</Button>
               </div>
             </div>
-
-            <div className="grid grid-cols-2 gap-4 text-sm">
-              <div>
-                <p className="text-xs font-bold text-slate-400 uppercase tracking-wide">Mobile Phone</p>
-                <p className="text-slate-800 dark:text-slate-200 mt-0.5">{viewMember.mobile}</p>
-              </div>
-              <div>
-                <p className="text-xs font-bold text-slate-400 uppercase tracking-wide">Email Address</p>
-                <p className="text-slate-800 dark:text-slate-200 mt-0.5">{viewMember.email || "N/A"}</p>
-              </div>
-              <div>
-                <p className="text-xs font-bold text-slate-400 uppercase tracking-wide">Gender / DOB</p>
-                <p className="text-slate-800 dark:text-slate-200 mt-0.5 capitalize">{viewMember.gender || "N/A"} ({viewMember.dob || "N/A"})</p>
-              </div>
-              <div>
-                <p className="text-xs font-bold text-slate-400 uppercase tracking-wide">Assigned Trainer</p>
-                <p className="text-slate-800 dark:text-slate-200 mt-0.5">
-                  {trainers.find(t => t.id === viewMember.trainerId)?.name || "No personal trainer"}
-                </p>
-              </div>
-              <div>
-                <p className="text-xs font-bold text-slate-400 uppercase tracking-wide">Plan Subscription</p>
-                <p className="text-slate-800 dark:text-slate-200 mt-0.5">
-                  {plans.find(p => p.id === viewMember.planId)?.name || "N/A"}
-                </p>
-              </div>
-              <div>
-                <p className="text-xs font-bold text-slate-400 uppercase tracking-wide">Membership Expiry</p>
-                <p className="text-slate-800 dark:text-slate-200 mt-0.5">{viewMember.expiryDate}</p>
-              </div>
-            </div>
-
-            <div className="text-sm">
-              <p className="text-xs font-bold text-slate-400 uppercase tracking-wide">Address</p>
-              <p className="text-slate-800 dark:text-slate-200 mt-0.5">{viewMember.address || "No address added"}</p>
-            </div>
-
-            <div className="text-sm">
-              <p className="text-xs font-bold text-slate-400 uppercase tracking-wide">Emergency contact</p>
-              <p className="text-slate-800 dark:text-slate-200 mt-0.5">{viewMember.emergencyContact || "None"}</p>
-            </div>
-
-            {viewMember.notes && (
-              <div className="bg-slate-50 dark:bg-slate-800/50 p-3 rounded-xl text-xs text-slate-600 dark:text-slate-400">
-                <strong>Internal Notes:</strong> {viewMember.notes}
-              </div>
-            )}
-
-            <div className="flex justify-end pt-2">
-              <Button onClick={() => setViewMember(null)}>Close Profile</Button>
-            </div>
-          </div>
-        )}
+          );
+        })()}
       </Modal>
 
       {/* Add Member Modal */}
@@ -397,16 +467,16 @@ export default function MembersPage() {
         <form onSubmit={handleAddSubmit} className="space-y-4">
           <div className="space-y-1.5">
             <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Full Name *</label>
-            <input type="text" required value={formData.name} onChange={(e) => setFormData({ ...formData, name: e.target.value })} className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 text-sm outline-none" placeholder="Jane Doe" />
+            <input type="text" required value={formData.name} onChange={(e) => setFormData({ ...formData, name: e.target.value })} className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 text-sm outline-none" placeholder="Rahul Sharma" />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Mobile *</label>
-              <input type="text" required value={formData.mobile} onChange={(e) => setFormData({ ...formData, mobile: e.target.value })} className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 text-sm outline-none" placeholder="+1 555-000-0000" />
+              <input type="text" required value={formData.mobile} onChange={(e) => setFormData({ ...formData, mobile: e.target.value })} className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 text-sm outline-none" placeholder="+91 98765 00000" />
             </div>
             <div className="space-y-1.5">
               <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Email</label>
-              <input type="email" value={formData.email} onChange={(e) => setFormData({ ...formData, email: e.target.value })} className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 text-sm outline-none" placeholder="jane@example.com" />
+              <input type="email" value={formData.email} onChange={(e) => setFormData({ ...formData, email: e.target.value })} className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 text-sm outline-none" placeholder="rahul@example.com" />
             </div>
           </div>
           <div className="grid grid-cols-2 gap-3">
@@ -427,20 +497,35 @@ export default function MembersPage() {
             <div className="space-y-1.5">
               <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Plan Subscription *</label>
               <select value={formData.planId} onChange={(e) => setFormData({ ...formData, planId: e.target.value })} className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 text-sm">
-                {plans.map(p => <option key={p.id} value={p.id}>{p.name} - {settings.currency}{p.price}</option>)}
+                {plans.map(p => <option key={p.id} value={p.id}>{p.name} - {formatCurrency(p.price)}</option>)}
               </select>
             </div>
             <div className="space-y-1.5">
-              <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Personal Trainer</label>
+              <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Trainer & PT Charges</label>
               <select value={formData.trainerId} onChange={(e) => setFormData({ ...formData, trainerId: e.target.value })} className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 text-sm">
-                <option value="">None</option>
-                {trainers.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                <option value="">No Trainer</option>
+                {trainers.map(t => {
+                  const isPT = t.trainerType === "Personal Trainer";
+                  return (
+                    <option key={t.id} value={t.id}>
+                      {t.name} — {t.trainerType || "Personal Trainer"} (PT: {formatCurrency(isPT ? (t.ptCharges || 0) : 0)})
+                    </option>
+                  );
+                })}
               </select>
             </div>
           </div>
+
+          {/* Live Breakdown in Add Modal */}
+          <div className="p-3 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200 dark:border-slate-700 text-xs flex justify-between items-center">
+            <span>Membership: <strong>{formatCurrency(membershipFee)}</strong></span>
+            <span>PT Fee: <strong className="text-purple-600">{formatCurrency(ptFee)}</strong></span>
+            <span>Total: <strong className="text-blue-600 text-sm font-bold">{formatCurrency(totalFee)}</strong></span>
+          </div>
+
           <div className="space-y-1.5">
             <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Full Address</label>
-            <input type="text" value={formData.address} onChange={(e) => setFormData({ ...formData, address: e.target.value })} className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 text-sm" placeholder="123 Gym St" />
+            <input type="text" value={formData.address} onChange={(e) => setFormData({ ...formData, address: e.target.value })} className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 text-sm" placeholder="123 Gym Road, Mumbai" />
           </div>
           <div className="space-y-1.5">
             <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Emergency Contact</label>
@@ -474,6 +559,20 @@ export default function MembersPage() {
               <input type="email" value={formData.email} onChange={(e) => setFormData({ ...formData, email: e.target.value })} className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 text-sm outline-none" />
             </div>
           </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Gender</label>
+              <select value={formData.gender} onChange={(e) => setFormData({ ...formData, gender: e.target.value })} className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 text-sm">
+                <option value="male">Male</option>
+                <option value="female">Female</option>
+                <option value="other">Other</option>
+              </select>
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Date of Birth</label>
+              <input type="date" value={formData.dob} onChange={(e) => setFormData({ ...formData, dob: e.target.value })} className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 text-sm outline-none" />
+            </div>
+          </div>
           <div className="grid grid-cols-3 gap-3">
             <div className="space-y-1.5">
               <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Plan</label>
@@ -485,7 +584,11 @@ export default function MembersPage() {
               <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Trainer</label>
               <select value={formData.trainerId} onChange={(e) => setFormData({ ...formData, trainerId: e.target.value })} className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 text-sm">
                 <option value="">None</option>
-                {trainers.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                {trainers.map(t => (
+                  <option key={t.id} value={t.id}>
+                    {t.name} ({t.trainerType || "PT"}: {formatCurrency(t.ptCharges || 0)})
+                  </option>
+                ))}
               </select>
             </div>
             <div className="space-y-1.5">

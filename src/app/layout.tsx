@@ -3,6 +3,7 @@ import { Inter } from "next/font/google";
 import "./globals.css";
 import { Toaster } from "sonner";
 import { AppProvider } from "@/lib/context/AppContext";
+import { AuthProvider } from "@/lib/context/AuthContext";
 
 const inter = Inter({ subsets: ["latin"], variable: "--font-sans" });
 
@@ -19,9 +20,11 @@ export default function RootLayout({
   return (
     <html lang="en" className={`${inter.variable}`}>
       <body className="font-sans text-slate-800 bg-slate-50 transition-colors duration-200">
-        <AppProvider>
-          {children}
-        </AppProvider>
+        <AuthProvider>
+          <AppProvider>
+            {children}
+          </AppProvider>
+        </AuthProvider>
         <Toaster position="top-right" richColors closeButton />
       </body>
     </html>

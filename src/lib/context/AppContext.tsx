@@ -1,9 +1,20 @@
 "use client";
 
-import React, { createContext, useContext, useState, useEffect } from "react";
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
 import { toast } from "sonner";
+import { formatCurrency, formatIndianNumber } from "@/lib/utils";
+import { useAuth } from "@/lib/context/AuthContext";
+import type { User } from "@/lib/auth/types";
 
-// Types
+// --- TYPES & INTERFACES ---
+export interface MemberPreviousPlan {
+  planId: string;
+  planName: string;
+  startDate: string;
+  expiryDate: string;
+  amount: number;
+}
+
 export interface Member {
   id: string;
   name: string;
@@ -20,6 +31,7 @@ export interface Member {
   status: "Active" | "Expired" | "Pending";
   photo: string;
   notes?: string;
+  previousPlans?: MemberPreviousPlan[];
 }
 
 export interface Trainer {
@@ -30,6 +42,10 @@ export interface Trainer {
   email: string;
   status: "Active" | "Inactive";
   photo: string;
+  trainerType: "General Trainer" | "Personal Trainer";
+  ptChargeType?: "Monthly" | "Per Session";
+  ptCharges: number;
+  availability?: string;
 }
 
 export interface MembershipPlan {
@@ -47,10 +63,37 @@ export interface Payment {
   memberName: string;
   planId: string;
   planName: string;
+  membershipAmount?: number;
+  ptAmount?: number;
+  amount: number; // Total amount = membershipAmount + ptAmount
+  date: string;
+  method: "Cash" | "Card" | "UPI" | "Bank Transfer" | "Cheque";
+  status: "Paid" | "Pending" | "Partial" | "Overdue" | "Failed";
+  notes?: string;
+}
+
+export type ExpenseCategory =
+  | "Electricity"
+  | "Water"
+  | "Rent"
+  | "Equipment"
+  | "Equipment Maintenance"
+  | "Staff Salary"
+  | "Cleaning"
+  | "Marketing"
+  | "Internet"
+  | "Miscellaneous"
+  | "Other";
+
+export interface Expense {
+  id: string;
+  title: string;
+  category: ExpenseCategory;
   amount: number;
   date: string;
-  method: "Cash" | "Card" | "UPI" | "Bank Transfer";
-  status: "Paid" | "Pending" | "Failed";
+  paymentMethod: "Cash" | "Card" | "UPI" | "Bank Transfer" | "Cheque";
+  description?: string;
+  addedBy?: string;
 }
 
 export interface Attendance {
@@ -68,12 +111,12 @@ export interface NotificationItem {
   message: string;
   date: string;
   read: boolean;
-  type: "info" | "success" | "warning" | "error";
+  type: "info" | "warning" | "success" | "error";
 }
 
 export interface Activity {
   id: string;
-  type: "member_added" | "payment_added" | "attendance_marked" | "plan_updated" | "trainer_added" | "plan_added" | "member_updated";
+  type: "member_added" | "member_updated" | "payment_added" | "trainer_added" | "plan_updated" | "attendance_marked" | "expense_added" | "expense_deleted";
   description: string;
   timestamp: string;
 }
@@ -89,214 +132,377 @@ export interface GymSettings {
   theme: "light" | "dark";
 }
 
-interface AppContextType {
+export interface OwnerGymData {
   members: Member[];
   trainers: Trainer[];
   plans: MembershipPlan[];
   payments: Payment[];
+  expenses: Expense[];
+  attendance: Attendance[];
+  notifications: NotificationItem[];
+  activities: Activity[];
+  settings: GymSettings;
+}
+
+interface AppContextType {
+  // State
+  members: Member[];
+  trainers: Trainer[];
+  plans: MembershipPlan[];
+  payments: Payment[];
+  expenses: Expense[];
   attendance: Attendance[];
   notifications: NotificationItem[];
   activities: Activity[];
   settings: GymSettings;
   theme: "light" | "dark";
-  searchQuery: string;
-  setSearchQuery: (query: string) => void;
+  isInitialized: boolean;
+
+  // Centralized Owner Data Management Layer
+  getCurrentUser: () => User | null;
+  getCurrentOwnerData: () => OwnerGymData | null;
+  saveOwnerData: (data: Partial<OwnerGymData>) => void;
+  getOwnerMembers: () => Member[];
+  getOwnerTrainers: () => Trainer[];
+  getOwnerPayments: () => Payment[];
+  getOwnerAttendance: () => Attendance[];
+  getOwnerExpenses: () => Expense[];
+  getOwnerMembershipPlans: () => MembershipPlan[];
+
+  // Theme & Currency
   toggleTheme: () => void;
-  
-  // Members CRUD
+  formatCurrency: (amount: number | string | undefined | null, includeSymbol?: boolean) => string;
+  formatIndianNumber: (num: number | string | undefined | null) => string;
+
+  // Members API
   addMember: (member: Omit<Member, "id">) => void;
   updateMember: (id: string, member: Partial<Member>) => void;
   deleteMember: (id: string) => void;
-  
-  // Trainers CRUD
+
+  // Trainers API
   addTrainer: (trainer: Omit<Trainer, "id">) => void;
   updateTrainer: (id: string, trainer: Partial<Trainer>) => void;
   deleteTrainer: (id: string) => void;
-  
-  // Plans CRUD
+
+  // Plans API
   addPlan: (plan: Omit<MembershipPlan, "id">) => void;
   updatePlan: (id: string, plan: Partial<MembershipPlan>) => void;
   deletePlan: (id: string) => void;
-  
-  // Payments CRUD
+
+  // Payments API
   addPayment: (payment: Omit<Payment, "id">) => void;
   updatePayment: (id: string, payment: Partial<Payment>) => void;
-  
-  // Attendance
+
+  // Expenses API
+  addExpense: (expense: Omit<Expense, "id">) => void;
+  updateExpense: (id: string, expense: Partial<Expense>) => void;
+  deleteExpense: (id: string) => void;
+
+  // Attendance API
   markAttendance: (memberId: string, status: "Present" | "Absent", date?: string) => void;
-  
-  // Notifications
+
+  // Notifications API
   addNotification: (title: string, message: string, type?: NotificationItem["type"]) => void;
   markNotificationAsRead: (id: string) => void;
   markAllNotificationsAsRead: () => void;
   deleteNotification: (id: string) => void;
   clearAllNotifications: () => void;
-  
-  // Settings
+
+  // Settings API
   updateSettings: (settings: Partial<GymSettings>) => void;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
-// Initial Mock Data
+// Helper to construct isolated LocalStorage key per gym owner email
+export const getOwnerStorageKey = (email: string): string => {
+  const sanitized = email.trim().toLowerCase().replace(/[^a-z0-9_]/g, "_");
+  return `gym_owner_data_${sanitized}`;
+};
+
+// Default General Gym Membership Plans (Owner Pricing)
 const defaultPlans: MembershipPlan[] = [
-  { id: "P-3001", name: "Basic Monthly", price: 29, durationMonths: 1, description: "Access to gym floor and standard equipment", status: "Active" },
-  { id: "P-3002", name: "Pro 6-Months", price: 149, durationMonths: 6, description: "Includes group classes and lockroom facilities", status: "Active" },
-  { id: "P-3003", name: "VIP Yearly", price: 299, durationMonths: 12, description: "All-access pass, personal trainer consultation, and spa", status: "Active" },
-];
-
-const defaultTrainers: Trainer[] = [
-  { id: "T-2001", name: "Marcus Aurelius", specialization: "Strength & Conditioning", mobile: "+1 555-101-1001", email: "marcus@gymation.com", status: "Active", photo: "https://images.unsplash.com/photo-1567013127542-490d757e51fc?w=256&h=256&q=80" },
-  { id: "T-2002", name: "Serena Williams", specialization: "CrossFit & HIIT", mobile: "+1 555-101-1002", email: "serena@gymation.com", status: "Active", photo: "https://images.unsplash.com/photo-1548690312-e3b507d8c110?w=256&h=256&q=80" },
-  { id: "T-2003", name: "David Beckham", specialization: "Cardio & Weight Loss", mobile: "+1 555-101-1003", email: "david@gymation.com", status: "Active", photo: "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=256&h=256&q=80" },
-];
-
-const defaultMembers: Member[] = [
-  { id: "M-1001", name: "Alex Johnson", mobile: "+1 234-567-8900", email: "alex@example.com", gender: "male", dob: "1994-05-15", address: "123 Main St, New York, NY", emergencyContact: "Jane Johnson - Spouse - +1 234-567-8999", planId: "P-3003", trainerId: "T-2001", joinDate: "2026-01-12", expiryDate: "2027-01-12", status: "Active", photo: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=256&h=256&q=80", notes: "Prefers morning workouts." },
-  { id: "M-1002", name: "Sarah Williams", mobile: "+1 234-567-8901", email: "sarah@example.com", gender: "female", dob: "1997-08-22", address: "456 Oak Ave, Brooklyn, NY", emergencyContact: "Robert Williams - Father - +1 234-567-8998", planId: "P-3001", trainerId: "T-2002", joinDate: "2026-07-01", expiryDate: "2026-08-01", status: "Active", photo: "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=256&h=256&q=80", notes: "Focusing on HIIT." },
-  { id: "M-1003", name: "Michael Brown", mobile: "+1 234-567-8902", email: "michael@example.com", gender: "male", dob: "1988-11-03", address: "789 Pine Rd, Queens, NY", emergencyContact: "Helen Brown - Mother - +1 234-567-8997", planId: "P-3002", trainerId: "T-2003", joinDate: "2026-01-15", expiryDate: "2026-07-15", status: "Expired", photo: "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=256&h=256&q=80", notes: "Injured shoulder." },
-  { id: "M-1004", name: "Emily Davis", mobile: "+1 234-567-8903", email: "emily@example.com", gender: "female", dob: "1999-02-14", address: "101 Elm St, Manhattan, NY", emergencyContact: "Tom Davis - Brother - +1 234-567-8996", planId: "P-3003", trainerId: "T-2001", joinDate: "2026-05-10", expiryDate: "2027-05-10", status: "Active", photo: "https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=256&h=256&q=80", notes: "Preparing for a marathon." },
-];
-
-const defaultPayments: Payment[] = [
-  { id: "PAY-4001", memberId: "M-1001", memberName: "Alex Johnson", planId: "P-3003", planName: "VIP Yearly", amount: 299, date: "2026-01-12", method: "Card", status: "Paid" },
-  { id: "PAY-4002", memberId: "M-1002", memberName: "Sarah Williams", planId: "P-3001", planName: "Basic Monthly", amount: 29, date: "2026-07-01", method: "UPI", status: "Paid" },
-  { id: "PAY-4003", memberId: "M-1003", memberName: "Michael Brown", planId: "P-3002", planName: "Pro 6-Months", amount: 149, date: "2026-01-15", method: "Bank Transfer", status: "Paid" },
-  { id: "PAY-4004", memberId: "M-1004", memberName: "Emily Davis", planId: "P-3003", planName: "VIP Yearly", amount: 299, date: "2026-05-10", method: "Card", status: "Paid" },
-];
-
-const defaultAttendance: Attendance[] = [
-  { id: "ATT-5001", memberId: "M-1001", memberName: "Alex Johnson", date: "2026-07-11", status: "Present", checkInTime: "07:30 AM" },
-  { id: "ATT-5002", memberId: "M-1002", memberName: "Sarah Williams", date: "2026-07-11", status: "Present", checkInTime: "08:15 AM" },
-  { id: "ATT-5003", memberId: "M-1004", memberName: "Emily Davis", date: "2026-07-11", status: "Present", checkInTime: "09:00 AM" },
-  { id: "ATT-5004", memberId: "M-1001", memberName: "Alex Johnson", date: "2026-07-10", status: "Present", checkInTime: "07:45 AM" },
-  { id: "ATT-5005", memberId: "M-1003", memberName: "Michael Brown", date: "2026-07-10", status: "Absent" },
-];
-
-const defaultNotifications: NotificationItem[] = [
-  { id: "NOT-6001", title: "New Member Registered", message: "Emily Davis registered as a new member with VIP Yearly plan.", date: "2026-07-11", read: false, type: "success" },
-  { id: "NOT-6002", title: "Payment Received", message: "Payment of $29 received from Sarah Williams.", date: "2026-07-01", read: true, type: "info" },
-  { id: "NOT-6003", title: "Membership Expired", message: "Michael Brown's subscription expired on 2026-07-15.", date: "2026-07-15", read: false, type: "warning" },
-];
-
-const defaultActivities: Activity[] = [
-  { id: "ACT-7001", type: "member_added", description: "Registered new member Emily Davis", timestamp: "Today at 09:00 AM" },
-  { id: "ACT-7002", type: "attendance_marked", description: "Marked Alex Johnson as Present for today", timestamp: "Today at 07:30 AM" },
-  { id: "ACT-7003", type: "payment_added", description: "Processed payment of $29 for Sarah Williams", timestamp: "Jul 01, 2026" },
-  { id: "ACT-7004", type: "trainer_added", description: "Added new trainer David Beckham", timestamp: "Jun 15, 2026" },
+  { 
+    id: "P-3001", 
+    name: "General Package - 1 Month", 
+    price: 500, 
+    durationMonths: 1, 
+    description: "Access to gym floor and standard fitness equipment", 
+    status: "Active" 
+  },
+  { 
+    id: "P-3002", 
+    name: "General Package - 3 Months", 
+    price: 1200, 
+    durationMonths: 3, 
+    description: "Access to all general gym areas and cardio equipment", 
+    status: "Active" 
+  },
+  { 
+    id: "P-3003", 
+    name: "General Package - 6 Months", 
+    price: 2100, 
+    durationMonths: 6, 
+    description: "Includes gym floor access, cardio deck, and locker facilities", 
+    status: "Active" 
+  },
+  { 
+    id: "P-3004", 
+    name: "General Package - 1 Year", 
+    price: 3600, 
+    durationMonths: 12, 
+    description: "Full year all-access pass to gym floor, cardio equipment, and lockers", 
+    status: "Active" 
+  },
 ];
 
 const defaultSettings: GymSettings = {
   gymName: "Gymation Fitness",
   email: "admin@gymation.com",
-  phone: "+1 555-GYM-INFO",
-  address: "500 Fitness Blvd, Muscle City",
-  currency: "$",
-  taxRate: 8.25,
+  phone: "+91 98765 00000",
+  address: "Plot 101, Gymation Tower, Bandra, Mumbai",
+  currency: "₹",
+  taxRate: 18.0,
   enableNotifications: true,
   theme: "light",
 };
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const { user } = useAuth();
   const [isInitialized, setIsInitialized] = useState(false);
   const [members, setMembers] = useState<Member[]>([]);
   const [trainers, setTrainers] = useState<Trainer[]>([]);
-  const [plans, setPlans] = useState<MembershipPlan[]>([]);
+  const [plans, setPlans] = useState<MembershipPlan[]>(defaultPlans);
   const [payments, setPayments] = useState<Payment[]>([]);
+  const [expenses, setExpenses] = useState<Expense[]>([]);
   const [attendance, setAttendance] = useState<Attendance[]>([]);
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [activities, setActivities] = useState<Activity[]>([]);
   const [settings, setSettings] = useState<GymSettings>(defaultSettings);
   const [theme, setTheme] = useState<"light" | "dark">("light");
-  const [searchQuery, setSearchQuery] = useState("");
 
-  // Load from Local Storage on mount
+  // Track active loaded owner email to prevent race conditions during switch
+  const activeOwnerEmailRef = useRef<string | null>(null);
+
+  // Load owner-specific data whenever user logs in or switches
   useEffect(() => {
-    if (typeof window !== "undefined") {
-      const getOrSet = <T,>(key: string, defaultValue: T): T => {
-        const stored = localStorage.getItem(key);
-        if (stored) {
-          try {
-            return JSON.parse(stored) as T;
-          } catch {
-            return defaultValue;
+    if (typeof window === "undefined") return;
+
+    if (!user) {
+      // User logged out: clear memory state
+      setMembers([]);
+      setTrainers([]);
+      setPlans(defaultPlans);
+      setPayments([]);
+      setExpenses([]);
+      setAttendance([]);
+      setNotifications([]);
+      setActivities([]);
+      setSettings(defaultSettings);
+      activeOwnerEmailRef.current = null;
+      setIsInitialized(false);
+      return;
+    }
+
+    const ownerKey = getOwnerStorageKey(user.email);
+    activeOwnerEmailRef.current = user.email;
+
+    const storedDataRaw = localStorage.getItem(ownerKey);
+    let ownerData: OwnerGymData;
+
+    if (storedDataRaw) {
+      try {
+        ownerData = JSON.parse(storedDataRaw);
+      } catch {
+        ownerData = createInitialOwnerData(user);
+      }
+    } else {
+      // First time login for this owner: create isolated partition
+      ownerData = createInitialOwnerData(user);
+      localStorage.setItem(ownerKey, JSON.stringify(ownerData));
+    }
+
+    // Apply owner data to state
+    setMembers(ownerData.members || []);
+    setTrainers(ownerData.trainers || []);
+    setPlans(ownerData.plans && ownerData.plans.length > 0 ? ownerData.plans : defaultPlans);
+    setPayments(ownerData.payments || []);
+    setExpenses(ownerData.expenses || []);
+    setAttendance(ownerData.attendance || []);
+    setNotifications(ownerData.notifications || []);
+    setActivities(ownerData.activities || []);
+    
+    const ownerSettings = {
+      ...defaultSettings,
+      ...(ownerData.settings || {}),
+      gymName: ownerData.settings?.gymName || user.gymName || "My Gym",
+      email: user.email,
+      phone: ownerData.settings?.phone || user.phone || "+91 98765 00000",
+      currency: "₹",
+    };
+    setSettings(ownerSettings);
+    setTheme(ownerSettings.theme || "light");
+
+    setIsInitialized(true);
+  }, [user]);
+
+  function createInitialOwnerData(currentUser: User): OwnerGymData {
+    const todayStr = new Date().toISOString().split("T")[0];
+    return {
+      members: [],
+      trainers: [],
+      plans: defaultPlans,
+      payments: [],
+      expenses: [],
+      attendance: [],
+      notifications: [
+        {
+          id: `NOT-WELCOME-${Date.now()}`,
+          title: "Welcome to Gymation!",
+          message: `Your management console for "${currentUser.gymName}" is active with Indian Rupee (₹) currency.`,
+          date: todayStr,
+          read: false,
+          type: "success",
+        },
+      ],
+      activities: [
+        {
+          id: `ACT-INIT-${Date.now()}`,
+          type: "member_added",
+          description: `Account initialized for ${currentUser.gymName}`,
+          timestamp: "Just now",
+        },
+      ],
+      settings: {
+        gymName: currentUser.gymName || "My Gym",
+        email: currentUser.email,
+        phone: currentUser.phone || "+91 98765 00000",
+        address: "Plot 101, Main Gym Hall",
+        currency: "₹",
+        taxRate: 18.0,
+        enableNotifications: true,
+        theme: "light",
+      },
+    };
+  }
+
+  // Centralized Owner Data Persistence
+  const syncToOwnerStorage = useCallback(() => {
+    if (typeof window === "undefined" || !user || !isInitialized) return;
+    if (activeOwnerEmailRef.current !== user.email) return;
+
+    const ownerKey = getOwnerStorageKey(user.email);
+    const ownerData: OwnerGymData = {
+      members,
+      trainers,
+      plans,
+      payments,
+      expenses,
+      attendance,
+      notifications,
+      activities,
+      settings,
+    };
+    localStorage.setItem(ownerKey, JSON.stringify(ownerData));
+  }, [user, isInitialized, members, trainers, plans, payments, expenses, attendance, notifications, activities, settings]);
+
+  // Synchronize state changes to owner storage
+  useEffect(() => {
+    syncToOwnerStorage();
+  }, [syncToOwnerStorage]);
+
+  // Centralized Owner Data Layer methods
+  const getCurrentUser = useCallback(() => user, [user]);
+
+  const getCurrentOwnerData = useCallback((): OwnerGymData | null => {
+    if (!user) return null;
+    return {
+      members,
+      trainers,
+      plans,
+      payments,
+      expenses,
+      attendance,
+      notifications,
+      activities,
+      settings,
+    };
+  }, [user, members, trainers, plans, payments, expenses, attendance, notifications, activities, settings]);
+
+  const saveOwnerData = useCallback((partial: Partial<OwnerGymData>) => {
+    if (!user) return;
+    if (partial.members !== undefined) setMembers(partial.members);
+    if (partial.trainers !== undefined) setTrainers(partial.trainers);
+    if (partial.plans !== undefined) setPlans(partial.plans);
+    if (partial.payments !== undefined) setPayments(partial.payments);
+    if (partial.expenses !== undefined) setExpenses(partial.expenses);
+    if (partial.attendance !== undefined) setAttendance(partial.attendance);
+    if (partial.notifications !== undefined) setNotifications(partial.notifications);
+    if (partial.activities !== undefined) setActivities(partial.activities);
+    if (partial.settings !== undefined) setSettings((prev) => ({ ...prev, ...partial.settings }));
+  }, [user]);
+
+  const getOwnerMembers = useCallback(() => members, [members]);
+  const getOwnerTrainers = useCallback(() => trainers, [trainers]);
+  const getOwnerPayments = useCallback(() => payments, [payments]);
+  const getOwnerAttendance = useCallback(() => attendance, [attendance]);
+  const getOwnerExpenses = useCallback(() => expenses, [expenses]);
+  const getOwnerMembershipPlans = useCallback(() => plans, [plans]);
+
+  // Expiry notification cron check for the active owner's members
+  useEffect(() => {
+    if (!isInitialized || !user || members.length === 0) return;
+
+    const today = new Date();
+    const todayStr = today.toISOString().split("T")[0];
+    const newNotifications: NotificationItem[] = [];
+
+    members.forEach((member) => {
+      if (member.status === "Active" && member.expiryDate) {
+        const expDate = new Date(member.expiryDate);
+        const diffTime = expDate.getTime() - today.getTime();
+        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+        let title = "";
+        let message = "";
+        let type: NotificationItem["type"] = "warning";
+
+        if (diffDays === 0) {
+          title = `🔄 Renewal Due Today: ${member.name}`;
+          message = `${member.name}'s membership expires today (${member.expiryDate}). Please collect renewal payment.`;
+          type = "warning";
+        } else if (diffDays > 0 && diffDays <= 7) {
+          title = `🔄 Upcoming Renewal (${diffDays} days): ${member.name}`;
+          message = `${member.name}'s subscription will expire on ${member.expiryDate} (in ${diffDays} days).`;
+          type = "info";
+        } else if (diffDays < 0 && Math.abs(diffDays) <= 30) {
+          title = `⚠️ Membership Expired: ${member.name}`;
+          message = `${member.name}'s membership expired on ${member.expiryDate}. Follow up for renewal.`;
+          type = "error";
+        }
+
+        if (title) {
+          const exists = notifications.some(
+            (n) => n.title === title && n.date === todayStr
+          );
+          if (!exists) {
+            newNotifications.push({
+              id: `NOT-REN-${member.id}-${todayStr}`,
+              title,
+              message,
+              date: todayStr,
+              read: false,
+              type,
+            });
           }
         }
-        localStorage.setItem(key, JSON.stringify(defaultValue));
-        return defaultValue;
-      };
-
-      setMembers(getOrSet("gym_members", defaultMembers));
-      setTrainers(getOrSet("gym_trainers", defaultTrainers));
-      setPlans(getOrSet("gym_plans", defaultPlans));
-      setPayments(getOrSet("gym_payments", defaultPayments));
-      setAttendance(getOrSet("gym_attendance", defaultAttendance));
-      setNotifications(getOrSet("gym_notifications", defaultNotifications));
-      setActivities(getOrSet("gym_activities", defaultActivities));
-      
-      const savedSettings = getOrSet("gym_settings", defaultSettings);
-      setSettings(savedSettings);
-      setTheme(savedSettings.theme || "light");
-      
-      setIsInitialized(true);
-    }
-  }, []);
-
-  // Sync state to local storage when it changes
-  useEffect(() => {
-    if (isInitialized) {
-      localStorage.setItem("gym_members", JSON.stringify(members));
-    }
-  }, [members, isInitialized]);
-
-  useEffect(() => {
-    if (isInitialized) {
-      localStorage.setItem("gym_trainers", JSON.stringify(trainers));
-    }
-  }, [trainers, isInitialized]);
-
-  useEffect(() => {
-    if (isInitialized) {
-      localStorage.setItem("gym_plans", JSON.stringify(plans));
-    }
-  }, [plans, isInitialized]);
-
-  useEffect(() => {
-    if (isInitialized) {
-      localStorage.setItem("gym_payments", JSON.stringify(payments));
-    }
-  }, [payments, isInitialized]);
-
-  useEffect(() => {
-    if (isInitialized) {
-      localStorage.setItem("gym_attendance", JSON.stringify(attendance));
-    }
-  }, [attendance, isInitialized]);
-
-  useEffect(() => {
-    if (isInitialized) {
-      localStorage.setItem("gym_notifications", JSON.stringify(notifications));
-    }
-  }, [notifications, isInitialized]);
-
-  useEffect(() => {
-    if (isInitialized) {
-      localStorage.setItem("gym_activities", JSON.stringify(activities));
-    }
-  }, [activities, isInitialized]);
-
-  useEffect(() => {
-    if (isInitialized) {
-      localStorage.setItem("gym_settings", JSON.stringify(settings));
-      // Update HTML class for dark mode
-      const root = window.document.documentElement;
-      if (theme === "dark") {
-        root.classList.add("dark");
-      } else {
-        root.classList.remove("dark");
       }
+    });
+
+    if (newNotifications.length > 0) {
+      setNotifications((prev) => [...newNotifications, ...prev]);
     }
-  }, [settings, theme, isInitialized]);
+  }, [isInitialized, user, members]);
 
   const toggleTheme = () => {
     const nextTheme = theme === "light" ? "dark" : "light";
@@ -327,147 +533,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setNotifications((prev) => [newNotif, ...prev]);
   };
 
-  // Members API
-  const addMember = (memberData: Omit<Member, "id">) => {
-    const newId = `M-${Math.floor(1000 + Math.random() * 9000)}`;
-    const newMember: Member = {
-      ...memberData,
-      id: newId,
-    };
-    setMembers((prev) => [newMember, ...prev]);
-    addActivity("member_added", `Registered new member ${newMember.name}`);
-    addNotification("New Member Registered", `${newMember.name} has joined the gym.`, "success");
-    toast.success(`Member ${newMember.name} added successfully!`);
-  };
-
-  const updateMember = (id: string, updatedData: Partial<Member>) => {
-    setMembers((prev) =>
-      prev.map((m) => (m.id === id ? { ...m, ...updatedData } as Member : m))
-    );
-    const memberName = members.find((m) => m.id === id)?.name || "Member";
-    addActivity("member_updated", `Updated member profile for ${memberName}`);
-    toast.success(`Member profile updated!`);
-  };
-
-  const deleteMember = (id: string) => {
-    const memberName = members.find((m) => m.id === id)?.name || "Member";
-    setMembers((prev) => prev.filter((m) => m.id !== id));
-    // Clean up attendance and payments
-    setAttendance((prev) => prev.filter((a) => a.memberId !== id));
-    setPayments((prev) => prev.filter((p) => p.memberId !== id));
-    addActivity("member_updated", `Deleted member ${memberName}`);
-    toast.success(`Member deleted and records archived.`);
-  };
-
-  // Trainers API
-  const addTrainer = (trainerData: Omit<Trainer, "id">) => {
-    const newId = `T-${Math.floor(2000 + Math.random() * 9000)}`;
-    const newTrainer: Trainer = {
-      ...trainerData,
-      id: newId,
-    };
-    setTrainers((prev) => [...prev, newTrainer]);
-    addActivity("trainer_added", `Onboarded new trainer ${newTrainer.name}`);
-    addNotification("New Trainer Onboarded", `${newTrainer.name} joined as a personal trainer.`, "info");
-    toast.success(`Trainer ${newTrainer.name} onboarded!`);
-  };
-
-  const updateTrainer = (id: string, updatedData: Partial<Trainer>) => {
-    setTrainers((prev) =>
-      prev.map((t) => (t.id === id ? { ...t, ...updatedData } as Trainer : t))
-    );
-    toast.success("Trainer updated successfully!");
-  };
-
-  const deleteTrainer = (id: string) => {
-    setTrainers((prev) => prev.filter((t) => t.id !== id));
-    // Reset assigned trainer for members
-    setMembers((prev) =>
-      prev.map((m) => (m.trainerId === id ? { ...m, trainerId: "" } : m))
-    );
-    toast.success("Trainer removed successfully.");
-  };
-
-  // Plans API
-  const addPlan = (planData: Omit<MembershipPlan, "id">) => {
-    const newId = `P-${Math.floor(3000 + Math.random() * 9000)}`;
-    const newPlan: MembershipPlan = {
-      ...planData,
-      id: newId,
-    };
-    setPlans((prev) => [...prev, newPlan]);
-    addActivity("plan_updated", `Created a new plan: ${newPlan.name}`);
-    toast.success(`Membership plan ${newPlan.name} created!`);
-  };
-
-  const updatePlan = (id: string, updatedData: Partial<MembershipPlan>) => {
-    setPlans((prev) =>
-      prev.map((p) => (p.id === id ? { ...p, ...updatedData } as MembershipPlan : p))
-    );
-    toast.success("Membership plan updated!");
-  };
-
-  const deletePlan = (id: string) => {
-    setPlans((prev) => prev.filter((p) => p.id !== id));
-    toast.success("Membership plan deleted.");
-  };
-
-  // Payments API
-  const addPayment = (paymentData: Omit<Payment, "id">) => {
-    const newId = `PAY-${Math.floor(4000 + Math.random() * 9000)}`;
-    const newPayment: Payment = {
-      ...paymentData,
-      id: newId,
-    };
-    setPayments((prev) => [newPayment, ...prev]);
-    addActivity("payment_added", `Received payment of ${settings.currency}${newPayment.amount} from ${newPayment.memberName}`);
-    addNotification("Payment Received", `Received ${settings.currency}${newPayment.amount} for plan renewal.`, "success");
-    toast.success(`Payment of ${settings.currency}${newPayment.amount} recorded!`);
-  };
-
-  const updatePayment = (id: string, updatedData: Partial<Payment>) => {
-    setPayments((prev) =>
-      prev.map((p) => (p.id === id ? { ...p, ...updatedData } as Payment : p))
-    );
-  };
-
-  // Attendance API
-  const markAttendance = (memberId: string, status: "Present" | "Absent", date?: string) => {
-    const today = date || new Date().toISOString().split("T")[0];
-    const member = members.find((m) => m.id === memberId);
-    if (!member) return;
-
-    // Check if attendance record already exists for this member on this date
-    setAttendance((prev) => {
-      const existingIdx = prev.findIndex((a) => a.memberId === memberId && a.date === today);
-      const currentTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      
-      if (existingIdx > -1) {
-        const updated = [...prev];
-        updated[existingIdx] = {
-          ...updated[existingIdx],
-          status,
-          checkInTime: status === "Present" ? currentTime : undefined,
-        };
-        return updated;
-      } else {
-        const newRecord: Attendance = {
-          id: `ATT-${Date.now()}`,
-          memberId,
-          memberName: member.name,
-          date: today,
-          status,
-          checkInTime: status === "Present" ? currentTime : undefined,
-        };
-        return [newRecord, ...prev];
-      }
-    });
-
-    addActivity("attendance_marked", `Marked ${member.name} as ${status}`);
-    toast.success(`Marked ${member.name} as ${status} for today.`);
-  };
-
-  // Notifications API
   const markNotificationAsRead = (id: string) => {
     setNotifications((prev) =>
       prev.map((n) => (n.id === id ? { ...n, read: true } : n))
@@ -485,19 +550,229 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const clearAllNotifications = () => {
     setNotifications([]);
-    toast.success("Notification center cleared.");
+    toast.success("Notifications cleared.");
   };
 
-  // Settings API
-  const updateSettings = (updatedSettings: Partial<GymSettings>) => {
-    setSettings((prev) => {
-      const next = { ...prev, ...updatedSettings };
-      if (updatedSettings.theme) {
-        setTheme(updatedSettings.theme);
-      }
-      return next;
-    });
-    toast.success("Settings updated successfully!");
+  // Members API — saves exclusively to currently logged-in owner
+  const addMember = (memberData: Omit<Member, "id">) => {
+    const newId = `M-${Math.floor(1000 + Math.random() * 9000)}`;
+    const newMember: Member = {
+      ...memberData,
+      id: newId,
+    };
+    setMembers((prev) => [...prev, newMember]);
+    addActivity("member_added", `Registered new gym member: ${newMember.name}`);
+    addNotification("New Member Registered", `${newMember.name} joined with ${newMember.status} status.`, "success");
+    toast.success(`Member ${newMember.name} added successfully!`);
+  };
+
+  const updateMember = (id: string, updatedData: Partial<Member>) => {
+    setMembers((prev) =>
+      prev.map((m) => {
+        if (m.id !== id) return m;
+        let previousPlans = m.previousPlans || [];
+        if (updatedData.planId && updatedData.planId !== m.planId) {
+          const oldPlan = plans.find((p) => p.id === m.planId);
+          if (oldPlan) {
+            previousPlans = [
+              ...previousPlans,
+              {
+                planId: oldPlan.id,
+                planName: oldPlan.name,
+                startDate: m.joinDate,
+                expiryDate: m.expiryDate,
+                amount: oldPlan.price,
+              },
+            ];
+          }
+        }
+        return { ...m, ...updatedData, previousPlans } as Member;
+      })
+    );
+    addActivity("member_updated", `Updated member profile (${id})`);
+    toast.success("Member record updated successfully!");
+  };
+
+  const deleteMember = (id: string) => {
+    const memberName = members.find((m) => m.id === id)?.name || id;
+    setMembers((prev) => prev.filter((m) => m.id !== id));
+    addActivity("member_updated", `Deleted member ${memberName}`);
+    toast.success(`Member deleted and records archived.`);
+  };
+
+  // Trainers API — saves exclusively to currently logged-in owner
+  const addTrainer = (trainerData: Omit<Trainer, "id">) => {
+    const newId = `T-${Math.floor(2000 + Math.random() * 9000)}`;
+    const newTrainer: Trainer = {
+      ...trainerData,
+      ptCharges: trainerData.trainerType === "General Trainer" ? 0 : Math.max(0, trainerData.ptCharges || 0),
+      id: newId,
+    };
+    setTrainers((prev) => [...prev, newTrainer]);
+    addActivity("trainer_added", `Onboarded new trainer ${newTrainer.name} (${newTrainer.trainerType})`);
+    addNotification("New Trainer Onboarded", `${newTrainer.name} joined as ${newTrainer.trainerType}.`, "info");
+    toast.success(`Trainer ${newTrainer.name} onboarded!`);
+  };
+
+  const updateTrainer = (id: string, updatedData: Partial<Trainer>) => {
+    setTrainers((prev) =>
+      prev.map((t) => {
+        if (t.id !== id) return t;
+        const nextType = updatedData.trainerType !== undefined ? updatedData.trainerType : t.trainerType;
+        const nextCharges = nextType === "General Trainer" ? 0 : Math.max(0, updatedData.ptCharges !== undefined ? updatedData.ptCharges : t.ptCharges);
+        return {
+          ...t,
+          ...updatedData,
+          ptCharges: nextCharges,
+        } as Trainer;
+      })
+    );
+    toast.success("Trainer updated successfully!");
+  };
+
+  const deleteTrainer = (id: string) => {
+    setTrainers((prev) => prev.filter((t) => t.id !== id));
+    setMembers((prev) =>
+      prev.map((m) => (m.trainerId === id ? { ...m, trainerId: "" } : m))
+    );
+    toast.success("Trainer removed successfully.");
+  };
+
+  // Plans API — saves exclusively to currently logged-in owner
+  const addPlan = (planData: Omit<MembershipPlan, "id">) => {
+    const newId = `P-${Math.floor(3000 + Math.random() * 9000)}`;
+    const newPlan: MembershipPlan = {
+      ...planData,
+      id: newId,
+    };
+    setPlans((prev) => [...prev, newPlan]);
+    addActivity("plan_updated", `Created a new plan: ${newPlan.name}`);
+    toast.success(`Membership plan ${newPlan.name} created!`);
+  };
+
+  const updatePlan = (id: string, updatedData: Partial<MembershipPlan>) => {
+    setPlans((prev) =>
+      prev.map((p) => (p.id === id ? ({ ...p, ...updatedData } as MembershipPlan) : p))
+    );
+    toast.success("Membership plan updated!");
+  };
+
+  const deletePlan = (id: string) => {
+    setPlans((prev) => prev.filter((p) => p.id !== id));
+    toast.success("Membership plan deleted.");
+  };
+
+  // Payments API — saves exclusively to currently logged-in owner
+  const addPayment = (paymentData: Omit<Payment, "id">) => {
+    const newId = `PAY-${Math.floor(4000 + Math.random() * 9000)}`;
+    const membershipAmount = Math.max(0, paymentData.membershipAmount !== undefined ? paymentData.membershipAmount : paymentData.amount);
+    const ptAmount = Math.max(0, paymentData.ptAmount || 0);
+    const totalAmount = paymentData.amount !== undefined ? paymentData.amount : (membershipAmount + ptAmount);
+
+    const newPayment: Payment = {
+      ...paymentData,
+      id: newId,
+      membershipAmount,
+      ptAmount,
+      amount: totalAmount,
+    };
+    setPayments((prev) => [newPayment, ...prev]);
+    addActivity("payment_added", `Received payment of ${formatCurrency(newPayment.amount)} from ${newPayment.memberName}`);
+    addNotification("Payment Received", `Received ${formatCurrency(newPayment.amount)} from ${newPayment.memberName}.`, "success");
+    toast.success(`Payment of ${formatCurrency(newPayment.amount)} recorded!`);
+  };
+
+  const updatePayment = (id: string, updatedData: Partial<Payment>) => {
+    setPayments((prev) =>
+      prev.map((p) => {
+        if (p.id !== id) return p;
+        const membershipAmount = updatedData.membershipAmount !== undefined ? updatedData.membershipAmount : (p.membershipAmount !== undefined ? p.membershipAmount : p.amount);
+        const ptAmount = updatedData.ptAmount !== undefined ? updatedData.ptAmount : (p.ptAmount !== undefined ? p.ptAmount : 0);
+        const amount = updatedData.amount !== undefined ? updatedData.amount : (membershipAmount + ptAmount);
+        return {
+          ...p,
+          ...updatedData,
+          membershipAmount,
+          ptAmount,
+          amount,
+        } as Payment;
+      })
+    );
+    toast.success("Payment updated successfully!");
+  };
+
+  // Expenses API — saves exclusively to currently logged-in owner
+  const addExpense = (expenseData: Omit<Expense, "id">) => {
+    const newId = `EXP-${Math.floor(8000 + Math.random() * 9000)}`;
+    const newExpense: Expense = {
+      ...expenseData,
+      amount: Math.max(0, expenseData.amount),
+      id: newId,
+    };
+    setExpenses((prev) => [newExpense, ...prev]);
+    addActivity("expense_added", `Recorded expense of ${formatCurrency(newExpense.amount)} for "${newExpense.title}" [${newExpense.category}]`);
+    toast.success(`Expense "${newExpense.title}" added successfully!`);
+  };
+
+  const updateExpense = (id: string, updatedData: Partial<Expense>) => {
+    setExpenses((prev) =>
+      prev.map((e) => {
+        if (e.id !== id) return e;
+        return {
+          ...e,
+          ...updatedData,
+          amount: updatedData.amount !== undefined ? Math.max(0, updatedData.amount) : e.amount,
+        } as Expense;
+      })
+    );
+    toast.success("Expense updated successfully!");
+  };
+
+  const deleteExpense = (id: string) => {
+    const expenseTitle = expenses.find((e) => e.id === id)?.title || id;
+    setExpenses((prev) => prev.filter((e) => e.id !== id));
+    addActivity("expense_deleted", `Deleted expense "${expenseTitle}"`);
+    toast.success(`Expense "${expenseTitle}" removed.`);
+  };
+
+  // Attendance API — saves exclusively to currently logged-in owner
+  const markAttendance = (memberId: string, status: "Present" | "Absent", date?: string) => {
+    const recordDate = date || new Date().toISOString().split("T")[0];
+    const member = members.find((m) => m.id === memberId);
+    if (!member) return;
+
+    const existingIndex = attendance.findIndex(
+      (a) => a.memberId === memberId && a.date === recordDate
+    );
+
+    const now = new Date();
+    const timeStr = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+    if (existingIndex >= 0) {
+      setAttendance((prev) =>
+        prev.map((a, idx) =>
+          idx === existingIndex ? { ...a, status, checkInTime: status === "Present" ? timeStr : undefined } : a
+        )
+      );
+      toast.success(`Updated attendance for ${member.name} as ${status}`);
+    } else {
+      const newAttendance: Attendance = {
+        id: `ATT-${Date.now()}`,
+        memberId: member.id,
+        memberName: member.name,
+        date: recordDate,
+        status,
+        checkInTime: status === "Present" ? timeStr : undefined,
+      };
+      setAttendance((prev) => [newAttendance, ...prev]);
+      addActivity("attendance_marked", `Marked ${member.name} as ${status} on ${recordDate}`);
+      toast.success(`Marked ${member.name} as ${status}`);
+    }
+  };
+
+  const updateSettings = (newSettings: Partial<GymSettings>) => {
+    setSettings((prev) => ({ ...prev, ...newSettings }));
+    toast.success("Gym settings saved successfully!");
   };
 
   return (
@@ -507,14 +782,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         trainers,
         plans,
         payments,
+        expenses,
         attendance,
         notifications,
         activities,
         settings,
         theme,
-        searchQuery,
-        setSearchQuery,
+        isInitialized,
+        getCurrentUser,
+        getCurrentOwnerData,
+        saveOwnerData,
+        getOwnerMembers,
+        getOwnerTrainers,
+        getOwnerPayments,
+        getOwnerAttendance,
+        getOwnerExpenses,
+        getOwnerMembershipPlans,
         toggleTheme,
+        formatCurrency,
+        formatIndianNumber,
         addMember,
         updateMember,
         deleteMember,
@@ -526,6 +812,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         deletePlan,
         addPayment,
         updatePayment,
+        addExpense,
+        updateExpense,
+        deleteExpense,
         markAttendance,
         addNotification,
         markNotificationAsRead,
@@ -542,7 +831,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
 export const useApp = () => {
   const context = useContext(AppContext);
-  if (context === undefined) {
+  if (!context) {
     throw new Error("useApp must be used within an AppProvider");
   }
   return context;

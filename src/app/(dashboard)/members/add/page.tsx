@@ -4,13 +4,14 @@ import { useState } from "react";
 import { useApp } from "@/lib/context/AppContext";
 import { Button } from "@/components/ui/Button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
-import { ArrowLeft, Save, X } from "lucide-react";
+import { ArrowLeft, Save, X, Dumbbell, CreditCard } from "lucide-react";
+import { formatCurrency, formatIndianNumber } from "@/lib/utils";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
 export default function AddMemberPage() {
   const router = useRouter();
-  const { plans, trainers, addMember, settings } = useApp();
+  const { plans, trainers, addMember, addPayment, settings } = useApp();
 
   const [formData, setFormData] = useState({
     name: "",
@@ -25,13 +26,23 @@ export default function AddMemberPage() {
     notes: ""
   });
 
+  const selectedPlan = plans.find((p) => p.id === formData.planId) || plans[0];
+  const selectedTrainer = trainers.find((t) => t.id === formData.trainerId);
+
+  const membershipFee = selectedPlan ? selectedPlan.price : 0;
+  const ptFee = selectedTrainer
+    ? (selectedTrainer.trainerType === "General Trainer" ? 0 : (selectedTrainer.ptCharges || 0))
+    : 0;
+  const totalAmount = membershipFee + ptFee;
+
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
 
-    const plan = plans.find(p => p.id === formData.planId);
-    const duration = plan ? plan.durationMonths : 1;
+    const duration = selectedPlan ? selectedPlan.durationMonths : 1;
     const expiry = new Date();
     expiry.setMonth(expiry.getMonth() + duration);
+
+    const newMemberId = `M-${Math.floor(1000 + Math.random() * 9000)}`;
 
     addMember({
       name: formData.name,
@@ -41,7 +52,7 @@ export default function AddMemberPage() {
       dob: formData.dob,
       address: formData.address,
       emergencyContact: formData.emergencyContact,
-      planId: formData.planId,
+      planId: formData.planId || plans[0]?.id || "",
       trainerId: formData.trainerId,
       joinDate: new Date().toISOString().split("T")[0],
       expiryDate: expiry.toISOString().split("T")[0],
@@ -49,6 +60,23 @@ export default function AddMemberPage() {
       photo: "https://images.unsplash.com/photo-1534438327276-14e5300c3a48?w=256&h=256&q=80",
       notes: formData.notes
     });
+
+    // Create itemized payment in INR
+    if (selectedPlan) {
+      addPayment({
+        memberId: newMemberId,
+        memberName: formData.name,
+        planId: selectedPlan.id,
+        planName: selectedPlan.name,
+        membershipAmount: membershipFee,
+        ptAmount: ptFee,
+        amount: totalAmount,
+        date: new Date().toISOString().split("T")[0],
+        method: "Cash",
+        status: "Paid",
+        notes: `Initial registration fee: Membership (${formatCurrency(membershipFee)}) + PT (${formatCurrency(ptFee)})`
+      });
+    }
 
     router.push("/members");
   };
@@ -63,7 +91,7 @@ export default function AddMemberPage() {
         </Link>
         <div>
           <h1 className="text-2xl font-bold text-slate-800 dark:text-slate-100 tracking-tight">Add New Member</h1>
-          <p className="text-sm text-slate-500 dark:text-slate-400">Register a new member to the gym.</p>
+          <p className="text-sm text-slate-500 dark:text-slate-400">Register a new member and calculate billing plan and PT charges in INR (₹).</p>
         </div>
       </div>
 
@@ -82,7 +110,7 @@ export default function AddMemberPage() {
                   value={formData.name}
                   onChange={(e) => setFormData({ ...formData, name: e.target.value })}
                   className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 focus:ring-2 focus:ring-blue-500 outline-none transition-all text-sm" 
-                  placeholder="John Doe" 
+                  placeholder="Rahul Sharma" 
                 />
               </div>
               <div className="space-y-1.5">
@@ -93,7 +121,7 @@ export default function AddMemberPage() {
                   value={formData.mobile}
                   onChange={(e) => setFormData({ ...formData, mobile: e.target.value })}
                   className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 focus:ring-2 focus:ring-blue-500 outline-none transition-all text-sm" 
-                  placeholder="+1 (555) 000-0000" 
+                  placeholder="+91 98765 00000" 
                 />
               </div>
               <div className="space-y-1.5">
@@ -103,7 +131,7 @@ export default function AddMemberPage() {
                   value={formData.email}
                   onChange={(e) => setFormData({ ...formData, email: e.target.value })}
                   className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 focus:ring-2 focus:ring-blue-500 outline-none transition-all text-sm" 
-                  placeholder="john@example.com" 
+                  placeholder="rahul@example.com" 
                 />
               </div>
               <div className="grid grid-cols-2 gap-4">
@@ -120,9 +148,10 @@ export default function AddMemberPage() {
                   </select>
                 </div>
                 <div className="space-y-1.5">
-                  <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Date of Birth</label>
+                  <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Date of Birth *</label>
                   <input 
                     type="date" 
+                    required
                     value={formData.dob}
                     onChange={(e) => setFormData({ ...formData, dob: e.target.value })}
                     className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 focus:ring-2 focus:ring-blue-500 outline-none transition-all text-sm" 
@@ -138,7 +167,7 @@ export default function AddMemberPage() {
                 value={formData.address}
                 onChange={(e) => setFormData({ ...formData, address: e.target.value })}
                 className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 focus:ring-2 focus:ring-blue-500 outline-none transition-all text-sm resize-none" 
-                placeholder="123 Main St, City, Country" 
+                placeholder="123 Gym Road, Mumbai, Maharashtra" 
               />
             </div>
             
@@ -157,7 +186,7 @@ export default function AddMemberPage() {
 
         <Card className="dark:bg-slate-900 dark:border-slate-800">
           <CardHeader>
-            <CardTitle className="dark:text-slate-100">Membership Details</CardTitle>
+            <CardTitle className="dark:text-slate-100">Membership & Trainer Assignment</CardTitle>
           </CardHeader>
           <CardContent className="space-y-6">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
@@ -169,33 +198,77 @@ export default function AddMemberPage() {
                   className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 focus:ring-2 focus:ring-blue-500 outline-none transition-all text-sm"
                 >
                   {plans.map((plan) => (
-                    <option key={plan.id} value={plan.id}>{plan.name} ({settings.currency}{plan.price})</option>
+                    <option key={plan.id} value={plan.id}>
+                      {plan.name} — {formatCurrency(plan.price)} ({plan.durationMonths} Mo)
+                    </option>
                   ))}
                 </select>
               </div>
+
               <div className="space-y-1.5">
-                <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Personal Trainer Assignment</label>
+                <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Select Trainer & PT Charges</label>
                 <select 
                   value={formData.trainerId} 
                   onChange={(e) => setFormData({ ...formData, trainerId: e.target.value })}
                   className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 focus:ring-2 focus:ring-blue-500 outline-none transition-all text-sm"
                 >
                   <option value="">No Trainer Assigned</option>
-                  {trainers.map((trainer) => (
-                    <option key={trainer.id} value={trainer.id}>{trainer.name} ({trainer.specialization})</option>
-                  ))}
+                  {trainers.map((trainer) => {
+                    const isPT = trainer.trainerType === "Personal Trainer";
+                    return (
+                      <option key={trainer.id} value={trainer.id}>
+                        {trainer.name} — {trainer.trainerType || "Personal Trainer"} (PT Charges: {formatCurrency(isPT ? (trainer.ptCharges || 0) : 0)}/{trainer.ptChargeType || "month"})
+                      </option>
+                    );
+                  })}
                 </select>
               </div>
             </div>
 
+            {/* Live Fee Calculation Breakdown */}
+            <div className="p-4 bg-slate-50 dark:bg-slate-800/60 rounded-2xl border border-slate-200 dark:border-slate-700/80 space-y-3">
+              <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wide flex items-center gap-1.5">
+                <CreditCard size={14} className="text-blue-500" />
+                Live Payment Calculation Breakdown
+              </h4>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-1">
+                <div className="p-3 bg-white dark:bg-slate-900 rounded-xl border border-slate-100 dark:border-slate-800">
+                  <p className="text-xs text-slate-500">Membership Fee</p>
+                  <p className="text-lg font-bold text-slate-800 dark:text-slate-100 mt-0.5">
+                    {formatCurrency(membershipFee)}
+                  </p>
+                  <p className="text-[10px] text-slate-400">{selectedPlan?.name || "Plan"}</p>
+                </div>
+
+                <div className="p-3 bg-white dark:bg-slate-900 rounded-xl border border-slate-100 dark:border-slate-800">
+                  <p className="text-xs text-slate-500">Personal Training Fee</p>
+                  <p className="text-lg font-bold text-purple-600 dark:text-purple-400 mt-0.5">
+                    {formatCurrency(ptFee)}
+                  </p>
+                  <p className="text-[10px] text-slate-400">
+                    {selectedTrainer ? `${selectedTrainer.name} (${selectedTrainer.trainerType})` : "None"}
+                  </p>
+                </div>
+
+                <div className="p-3 bg-blue-50 dark:bg-blue-950/30 rounded-xl border border-blue-200 dark:border-blue-900/50">
+                  <p className="text-xs text-blue-700 dark:text-blue-300 font-semibold">Total Registration Fee</p>
+                  <p className="text-xl font-extrabold text-blue-900 dark:text-blue-200 mt-0.5">
+                    {formatCurrency(totalAmount)}
+                  </p>
+                  <p className="text-[10px] text-blue-600 dark:text-blue-400 font-medium">Auto-recorded upon submit</p>
+                </div>
+              </div>
+            </div>
+
             <div className="space-y-1.5">
-              <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Additional Notes</label>
+              <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Additional Fitness Notes</label>
               <textarea 
-                rows={3} 
+                rows={2} 
                 value={formData.notes}
                 onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
                 className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 focus:ring-2 focus:ring-blue-500 outline-none transition-all text-sm resize-none" 
-                placeholder="Medical conditions, fitness goals, etc." 
+                placeholder="Fitness targets, preferred schedule, medical history..." 
               />
             </div>
           </CardContent>
@@ -208,7 +281,7 @@ export default function AddMemberPage() {
           </Button>
           <Button type="submit" className="gap-2 bg-blue-600 hover:bg-blue-700 text-white">
             <Save size={16} />
-            Save Member
+            Save Member & Record Payment
           </Button>
         </div>
       </form>

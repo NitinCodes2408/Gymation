@@ -6,7 +6,8 @@ import { Button } from "@/components/ui/Button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
 import { Modal } from "@/components/ui/Modal";
 import { Badge } from "@/components/ui/Badge";
-import { Check, Star, Plus, Edit, Trash2, RefreshCw } from "lucide-react";
+import { formatCurrency, formatIndianNumber } from "@/lib/utils";
+import { Check, Star, Plus, Edit, Trash2, RefreshCw, Zap } from "lucide-react";
 import { toast } from "sonner";
 
 export default function MembershipPlansPage() {
@@ -19,7 +20,7 @@ export default function MembershipPlansPage() {
   // Form States for Plan
   const [planForm, setPlanForm] = useState({
     name: "",
-    price: 0,
+    price: 500,
     durationMonths: 1,
     description: "",
     status: "Active" as "Active" | "Inactive"
@@ -37,7 +38,7 @@ export default function MembershipPlansPage() {
   };
 
   const handleOpenCreate = () => {
-    setPlanForm({ name: "", price: 0, durationMonths: 1, description: "", status: "Active" });
+    setPlanForm({ name: "", price: 500, durationMonths: 1, description: "", status: "Active" });
     setIsCreateOpen(true);
   };
 
@@ -112,10 +113,13 @@ export default function MembershipPlansPage() {
       memberName: member.name,
       planId: plan.id,
       planName: plan.name,
+      membershipAmount: plan.price,
+      ptAmount: 0,
       amount: plan.price,
       date: new Date().toISOString().split("T")[0],
       method: paymentMethod,
-      status: "Paid"
+      status: "Paid",
+      notes: `Plan renewal: ${plan.name}`
     });
 
     toast.success(`Membership renewed successfully! New Expiry: ${newExpiryDate}`);
@@ -123,11 +127,13 @@ export default function MembershipPlansPage() {
   };
 
   return (
-    <div className="space-y-6 max-w-7xl mx-auto">
+    <div className="space-y-6 max-w-7xl mx-auto pb-12">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
           <h1 className="text-2xl font-bold text-slate-800 dark:text-slate-100 tracking-tight">Membership Plans</h1>
-          <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">Manage pricing plans, packages, subscriptions, and renewals.</p>
+          <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
+            General gym membership packages with actual rates in Indian Rupees (₹).
+          </p>
         </div>
         <div className="flex gap-2">
           <Button onClick={() => setIsRenewOpen(true)} className="gap-2 bg-indigo-600 hover:bg-indigo-700 text-white">
@@ -141,43 +147,54 @@ export default function MembershipPlansPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-8 py-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6 py-4">
         {plans.map((plan) => {
           const count = getMemberCount(plan.id);
-          const isVip = plan.name.toLowerCase().includes("vip");
-          const isPro = plan.name.toLowerCase().includes("pro");
+          const isPopular = plan.durationMonths === 6 || plan.name.toLowerCase().includes("6 month");
+
           return (
-            <div key={plan.id} className={`relative flex flex-col rounded-3xl border ${isPro ? 'border-2 border-blue-500 shadow-xl' : 'border-slate-200 dark:border-slate-850 shadow-sm'} bg-white dark:bg-slate-900 overflow-hidden transition-transform hover:-translate-y-2 duration-300`}>
-              {isPro && (
+            <div 
+              key={plan.id} 
+              className={`relative flex flex-col rounded-3xl border ${isPopular ? 'border-2 border-blue-500 shadow-xl' : 'border-slate-200 dark:border-slate-850 shadow-sm'} bg-white dark:bg-slate-900 overflow-hidden transition-transform hover:-translate-y-2 duration-300`}
+            >
+              {isPopular && (
                 <div className="absolute top-0 inset-x-0 bg-blue-500 text-white text-[10px] font-bold uppercase tracking-wider py-1.5 text-center flex items-center justify-center gap-1">
+                  <Star size={11} className="fill-white" />
                   Most Popular
                 </div>
               )}
               
-              <div className={`p-8 ${isPro ? 'pt-12' : ''} border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50`}>
+              <div className={`p-6 sm:p-7 ${isPopular ? 'pt-10' : ''} border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50`}>
                 <div className="flex justify-between items-start">
-                  <h3 className="text-xl font-bold text-slate-800 dark:text-white">{plan.name}</h3>
+                  <div>
+                    <span className="text-[10px] font-extrabold uppercase tracking-widest text-blue-600 dark:text-blue-400">
+                      General Package
+                    </span>
+                    <h3 className="text-lg font-bold text-slate-800 dark:text-white mt-0.5">{plan.name}</h3>
+                  </div>
                   <Badge variant={plan.status === "Active" ? "success" : "danger"}>
                     {plan.status}
                   </Badge>
                 </div>
                 <p className="text-xs text-slate-500 dark:text-slate-400 mt-2 line-clamp-2 h-8">{plan.description}</p>
-                <div className="mt-6 flex items-baseline gap-1">
-                  <span className="text-4xl font-extrabold text-slate-900 dark:text-white">{settings.currency}{plan.price}</span>
-                  <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">/ {plan.durationMonths} Mo</span>
+                <div className="mt-5 flex items-baseline gap-1">
+                  <span className="text-3xl sm:text-4xl font-extrabold text-slate-900 dark:text-white">{formatCurrency(plan.price)}</span>
+                  <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">
+                    / {plan.durationMonths === 1 ? "1 Month" : plan.durationMonths === 12 ? "1 Year" : `${plan.durationMonths} Months`}
+                  </span>
                 </div>
               </div>
               
-              <div className="p-8 flex-1 flex flex-col justify-between space-y-6">
+              <div className="p-6 sm:p-7 flex-1 flex flex-col justify-between space-y-6">
                 <div>
                   <div className="text-xs font-bold uppercase text-slate-400 tracking-wider mb-3">Subscription Metrics</div>
-                  <div className="bg-slate-50 dark:bg-slate-800/50 rounded-xl p-3 text-sm text-slate-700 dark:text-slate-350">
+                  <div className="bg-slate-50 dark:bg-slate-800/50 rounded-xl p-3 text-xs sm:text-sm text-slate-700 dark:text-slate-350">
                     Active Subscribers: <strong className="text-slate-900 dark:text-white font-bold">{count} members</strong>
                   </div>
                 </div>
                 
                 <div className="space-y-3">
-                  <Button onClick={() => handleOpenRenew(plan.id)} variant={isPro ? "primary" : "outline"} className="w-full h-10 text-xs font-semibold rounded-xl">
+                  <Button onClick={() => handleOpenRenew(plan.id)} variant={isPopular ? "primary" : "outline"} className="w-full h-10 text-xs font-semibold rounded-xl">
                     Renew Member Subscription
                   </Button>
                   <div className="flex gap-2">
@@ -196,12 +213,12 @@ export default function MembershipPlansPage() {
         <form onSubmit={handleCreateSubmit} className="space-y-4">
           <div className="space-y-1.5">
             <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Plan Name *</label>
-            <input type="text" required value={planForm.name} onChange={(e) => setPlanForm({ ...planForm, name: e.target.value })} className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 text-sm outline-none" placeholder="e.g. Bronze Standard" />
+            <input type="text" required value={planForm.name} onChange={(e) => setPlanForm({ ...planForm, name: e.target.value })} className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 text-sm outline-none" placeholder="e.g. General Package - 1 Month" />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
-              <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Price ({settings.currency}) *</label>
-              <input type="number" required value={planForm.price} onChange={(e) => setPlanForm({ ...planForm, price: Number(e.target.value) })} className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 text-sm" />
+              <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Price (₹) *</label>
+              <input type="number" required value={planForm.price} onChange={(e) => setPlanForm({ ...planForm, price: Number(e.target.value) })} className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 text-sm" placeholder="500" />
             </div>
             <div className="space-y-1.5">
               <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Duration (Months) *</label>
@@ -228,7 +245,7 @@ export default function MembershipPlansPage() {
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
-              <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Price ({settings.currency}) *</label>
+              <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Price (₹) *</label>
               <input type="number" required value={planForm.price} onChange={(e) => setPlanForm({ ...planForm, price: Number(e.target.value) })} className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 text-sm" />
             </div>
             <div className="space-y-1.5">
@@ -255,10 +272,10 @@ export default function MembershipPlansPage() {
       </Modal>
 
       {/* Renew Member Subscription Modal */}
-      <Modal isOpen={isRenewOpen} onClose={() => setIsRenewOpen(false)} title="Renew Member Subscription Plan">
+      <Modal isOpen={isRenewOpen} onClose={() => setIsRenewOpen(false)} title="Renew Member Subscription">
         <form onSubmit={handleRenewSubmit} className="space-y-4">
           <div className="space-y-1.5">
-            <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Member *</label>
+            <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Select Member *</label>
             <select 
               required 
               value={renewForm.memberId} 
@@ -267,23 +284,30 @@ export default function MembershipPlansPage() {
             >
               <option value="">Select Member</option>
               {members.map(m => (
-                <option key={m.id} value={m.id}>{m.name} ({m.id}) - Expires: {m.expiryDate}</option>
+                <option key={m.id} value={m.id}>
+                  {m.name} ({m.id}) - Current Exp: {m.expiryDate}
+                </option>
               ))}
             </select>
           </div>
+
           <div className="space-y-1.5">
-            <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Plan *</label>
+            <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Target Renewal Plan *</label>
             <select 
               required 
               value={renewForm.planId} 
               onChange={(e) => setRenewForm({ ...renewForm, planId: e.target.value })} 
               className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 text-sm outline-none"
             >
+              <option value="">Select Plan</option>
               {plans.map(p => (
-                <option key={p.id} value={p.id}>{p.name} ({settings.currency}{p.price})</option>
+                <option key={p.id} value={p.id}>
+                  {p.name} — {formatCurrency(p.price)} ({p.durationMonths === 12 ? "1 Year" : `${p.durationMonths} Months`})
+                </option>
               ))}
             </select>
           </div>
+
           <div className="space-y-1.5">
             <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Payment Method</label>
             <select 
@@ -297,6 +321,7 @@ export default function MembershipPlansPage() {
               <option value="Bank Transfer">Bank Transfer</option>
             </select>
           </div>
+
           <div className="flex justify-end gap-3 pt-2">
             <Button type="button" variant="ghost" onClick={() => setIsRenewOpen(false)}>Cancel</Button>
             <Button type="submit" className="bg-indigo-600 hover:bg-indigo-700 text-white">Process Renewal</Button>

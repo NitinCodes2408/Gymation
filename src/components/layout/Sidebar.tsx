@@ -16,20 +16,24 @@ import {
   ChevronLeft,
   ChevronRight,
   UserCheck,
-  Menu,
+  Receipt,
+  FileText,
   X
 } from "lucide-react";
 import clsx from "clsx";
 import { motion, AnimatePresence } from "framer-motion";
 import { toast } from "sonner";
+import { useAuth } from "@/lib/context/AuthContext";
 
-const menuItems = [
+const navigation = [
   { name: "Dashboard", href: "/", icon: LayoutDashboard },
   { name: "Members", href: "/members", icon: Users },
+  { name: "Member Reports", href: "/member-reports", icon: FileText },
   { name: "Trainers", href: "/trainers", icon: UserCheck },
   { name: "Membership Plans", href: "/membership-plans", icon: CreditCard },
   { name: "Attendance", href: "/attendance", icon: CalendarCheck },
   { name: "Payments", href: "/payments", icon: Wallet },
+  { name: "Expenses", href: "/expenses", icon: Receipt },
   { name: "Reports", href: "/reports", icon: BarChart3 },
   { name: "Settings", href: "/settings", icon: Settings },
 ];
@@ -44,10 +48,12 @@ interface SidebarProps {
 export default function Sidebar({ isOpenMobile, setIsOpenMobile, isCollapsed, setIsCollapsed }: SidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
+  const { logout } = useAuth();
 
   const handleLogout = () => {
-    toast.error("Logged out successfully (frontend simulation).");
-    // Redirect or simulate log out
+    logout();
+    toast.success("Logged out successfully.");
+    router.push("/login");
   };
 
   const sidebarContent = (
@@ -81,7 +87,7 @@ export default function Sidebar({ isOpenMobile, setIsOpenMobile, isCollapsed, se
 
       {/* Navigation Items */}
       <div className="flex-1 overflow-y-auto py-6 px-4 space-y-1">
-        {menuItems.map((item) => {
+        {navigation.map((item) => {
           const isActive = pathname === item.href || (item.href !== "/" && pathname.startsWith(item.href));
           
           return (

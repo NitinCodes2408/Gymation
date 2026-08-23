@@ -7,11 +7,28 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/Table";
 import { Badge } from "@/components/ui/Badge";
 import { Modal } from "@/components/ui/Modal";
-import { Search, Fingerprint, Calendar as CalendarIcon, UserCheck, UserX, Clock, Users, ChevronLeft, ChevronRight } from "lucide-react";
+import { Search, Fingerprint, Calendar as CalendarIcon, UserCheck, UserX, Clock, Users, ChevronLeft, ChevronRight, Download } from "lucide-react";
+import { toast } from "sonner";
 
 export default function AttendancePage() {
   const { members, attendance, markAttendance } = useApp();
   const [activeTab, setActiveTab] = useState<"daily" | "calendar">("daily");
+
+  const handleExportAttendance = () => {
+    if (attendance.length === 0) {
+      toast.error("No attendance data to export");
+      return;
+    }
+    const headers = "ID,Member ID,Member Name,Date,Status,Check-in Time\n";
+    const rows = attendance.map(a => `"${a.id}","${a.memberId}","${a.memberName}","${a.date}","${a.status}","${a.checkInTime || 'N/A'}"`).join("\n");
+    const blob = new Blob([headers + rows], { type: "text/csv" });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.setAttribute("href", url);
+    a.setAttribute("download", `Gym_Attendance_${new Date().toISOString().split("T")[0]}.csv`);
+    a.click();
+    toast.success("Attendance report downloaded successfully!");
+  };
   
   const [search, setSearch] = useState("");
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split("T")[0]);
@@ -22,6 +39,8 @@ export default function AttendancePage() {
   // Calendar specific state
   const [currentMonth, setCurrentMonth] = useState(new Date().getMonth());
   const [currentYear, setCurrentYear] = useState(new Date().getFullYear());
+  const [eventFilter, setEventFilter] = useState<"all" | "birthdays" | "renewals">("all");
+  const [selectedDayModal, setSelectedDayModal] = useState<{ day: number; dateStr: string; events: any[] } | null>(null);
 
   const activeMembers = members.filter(m => m.status === "Active");
   const totalExpected = activeMembers.length;
@@ -83,39 +102,56 @@ export default function AttendancePage() {
     const formattedDay = String(day).padStart(2, '0');
     const dateStr = `${currentYear}-${formattedMonth}-${formattedDay}`;
 
-    const dayEvents = [];
+    const dayEvents: Array<{ type: string; label: string; member?: any; color: string }> = [];
 
     // 1. Membership Renewals
     const renewals = members.filter(m => m.expiryDate === dateStr);
-    renewals.forEach(m => dayEvents.push({ type: "Renewal", label: `Renew ${m.name}`, color: "bg-amber-100 text-amber-850 dark:bg-amber-950/40 dark:text-amber-300" }));
+    renewals.forEach(m => dayEvents.push({ 
+      type: "Renewal", 
+      label: `🔄 Renew: ${m.name}`, 
+      member: m,
+      color: "bg-amber-100 text-amber-900 border border-amber-200 dark:bg-amber-950/70 dark:text-amber-300 dark:border-amber-800" 
+    }));
 
     // 2. Birthdays
     const bdays = members.filter(m => {
       if (!m.dob) return false;
-      const [, mMonth, mDay] = m.dob.split("-");
-      return mMonth === formattedMonth && mDay === formattedDay;
+      const parts = m.dob.split("-");
+      return parts.length === 3 && parts[1] === formattedMonth && parts[2] === formattedDay;
     });
-    bdays.forEach(m => dayEvents.push({ type: "Birthday", label: `🎂 ${m.name}`, color: "bg-pink-100 text-pink-850 dark:bg-pink-950/40 dark:text-pink-300" }));
+    bdays.forEach(m => dayEvents.push({ 
+      type: "Birthday", 
+      label: `🎂 Birthday: ${m.name}`, 
+      member: m,
+      color: "bg-pink-100 text-pink-900 border border-pink-200 dark:bg-pink-950/70 dark:text-pink-300 dark:border-pink-800" 
+    }));
 
     // 3. Gym Holidays (Static Mock)
     if (day === 25 && currentMonth === 11) {
-      dayEvents.push({ type: "Holiday", label: "🎄 Christmas Closed", color: "bg-red-100 text-red-850 dark:bg-red-950/40 dark:text-red-300" });
+      dayEvents.push({ type: "Holiday", label: "🎄 Christmas Closed", color: "bg-red-100 text-red-900 border border-red-200 dark:bg-red-950/70 dark:text-red-300" });
     }
     if (day === 1 && currentMonth === 0) {
-      dayEvents.push({ type: "Holiday", label: "🎆 New Year Closed", color: "bg-red-100 text-red-850 dark:bg-red-950/40 dark:text-red-300" });
+      dayEvents.push({ type: "Holiday", label: "🎆 New Year Closed", color: "bg-red-100 text-red-900 border border-red-200 dark:bg-red-950/70 dark:text-red-300" });
     }
 
     // 4. Maintenance (Mock)
     if (day === 15) {
-      dayEvents.push({ type: "Maintenance", label: "⚙️ Equipment Service", color: "bg-slate-100 text-slate-805 dark:bg-slate-800 dark:text-slate-300" });
+      dayEvents.push({ type: "Maintenance", label: "⚙️ Equipment Service", color: "bg-slate-100 text-slate-800 border border-slate-200 dark:bg-slate-800 dark:text-slate-300" });
     }
 
     // 5. PT Sessions (Mock for members with trainers)
     if (day % 3 === 0 && day <= 28) {
       const ptMembers = members.filter(m => m.trainerId !== "");
       if (ptMembers.length > 0) {
-        dayEvents.push({ type: "PT Session", label: `🏋️ PT Session (${ptMembers.length})`, color: "bg-blue-100 text-blue-850 dark:bg-blue-950/40 dark:text-blue-300" });
+        dayEvents.push({ type: "PT Session", label: `🏋️ PT Sessions (${ptMembers.length})`, color: "bg-blue-100 text-blue-900 border border-blue-200 dark:bg-blue-950/70 dark:text-blue-300" });
       }
+    }
+
+    if (eventFilter === "birthdays") {
+      return dayEvents.filter(e => e.type === "Birthday");
+    }
+    if (eventFilter === "renewals") {
+      return dayEvents.filter(e => e.type === "Renewal");
     }
 
     return dayEvents;
@@ -129,19 +165,24 @@ export default function AttendancePage() {
           <h1 className="text-2xl font-bold text-slate-800 dark:text-slate-100 tracking-tight">Attendance & Events Portal</h1>
           <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">Track check-ins and look up calendar events.</p>
         </div>
-        <div className="flex items-center gap-3 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-1 shadow-sm">
-          <button 
-            onClick={() => setActiveTab("daily")}
-            className={`px-4 py-2 rounded-lg text-xs font-bold transition-colors ${activeTab === "daily" ? "bg-blue-600 text-white" : "text-slate-500 hover:text-slate-700"}`}
-          >
-            Daily Check-Ins
-          </button>
-          <button 
-            onClick={() => setActiveTab("calendar")}
-            className={`px-4 py-2 rounded-lg text-xs font-bold transition-colors ${activeTab === "calendar" ? "bg-blue-600 text-white" : "text-slate-500 hover:text-slate-700"}`}
-          >
-            Monthly Calendar
-          </button>
+        <div className="flex items-center gap-3">
+          <Button variant="outline" size="sm" onClick={handleExportAttendance} className="gap-2 border-slate-200 dark:border-slate-800 dark:text-slate-350">
+            <Download size={14} /> Export CSV
+          </Button>
+          <div className="flex items-center gap-3 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-1 shadow-sm">
+            <button 
+              onClick={() => setActiveTab("daily")}
+              className={`px-4 py-2 rounded-lg text-xs font-bold transition-colors ${activeTab === "daily" ? "bg-blue-600 text-white" : "text-slate-500 hover:text-slate-700"}`}
+            >
+              Daily Check-Ins
+            </button>
+            <button 
+              onClick={() => setActiveTab("calendar")}
+              className={`px-4 py-2 rounded-lg text-xs font-bold transition-colors ${activeTab === "calendar" ? "bg-blue-600 text-white" : "text-slate-500 hover:text-slate-700"}`}
+            >
+              Monthly Calendar
+            </button>
+          </div>
         </div>
       </div>
 
@@ -296,18 +337,46 @@ export default function AttendancePage() {
       ) : (
         /* Monthly Calendar View */
         <Card className="dark:bg-slate-900 dark:border-slate-800">
-          <CardHeader className="border-b border-slate-100 dark:border-slate-800 flex flex-row justify-between items-center">
-            <CardTitle className="dark:text-slate-100 flex items-center gap-2">
-              <CalendarIcon size={20} className="text-blue-500" />
-              Event Calendar: {monthNames[currentMonth]} {currentYear}
-            </CardTitle>
-            <div className="flex gap-2">
-              <Button variant="outline" size="sm" onClick={handlePrevMonth} className="p-2 border-slate-200 dark:border-slate-850">
-                <ChevronLeft size={16} />
-              </Button>
-              <Button variant="outline" size="sm" onClick={handleNextMonth} className="p-2 border-slate-200 dark:border-slate-850">
-                <ChevronRight size={16} />
-              </Button>
+          <CardHeader className="border-b border-slate-100 dark:border-slate-800 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+            <div>
+              <CardTitle className="dark:text-slate-100 flex items-center gap-2">
+                <CalendarIcon size={20} className="text-blue-500" />
+                Event Calendar: {monthNames[currentMonth]} {currentYear}
+              </CardTitle>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Click any day to view detailed birthdays & renewal events.</p>
+            </div>
+            
+            <div className="flex flex-wrap items-center gap-2">
+              {/* Event category filter tabs */}
+              <div className="flex items-center gap-1 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl text-xs font-semibold">
+                <button
+                  onClick={() => setEventFilter("all")}
+                  className={`px-3 py-1.5 rounded-lg transition-all ${eventFilter === "all" ? "bg-white dark:bg-slate-900 text-slate-800 dark:text-white shadow-sm font-bold" : "text-slate-500 hover:text-slate-800 dark:hover:text-slate-200"}`}
+                >
+                  All Events
+                </button>
+                <button
+                  onClick={() => setEventFilter("birthdays")}
+                  className={`px-3 py-1.5 rounded-lg transition-all flex items-center gap-1 ${eventFilter === "birthdays" ? "bg-pink-500 text-white shadow-sm font-bold" : "text-pink-600 dark:text-pink-400 hover:bg-pink-50 dark:hover:bg-pink-950/40"}`}
+                >
+                  🎂 Birthdays
+                </button>
+                <button
+                  onClick={() => setEventFilter("renewals")}
+                  className={`px-3 py-1.5 rounded-lg transition-all flex items-center gap-1 ${eventFilter === "renewals" ? "bg-amber-500 text-white shadow-sm font-bold" : "text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-950/40"}`}
+                >
+                  🔄 Renewals
+                </button>
+              </div>
+
+              <div className="flex gap-1.5">
+                <Button variant="outline" size="sm" onClick={handlePrevMonth} className="p-2 border-slate-200 dark:border-slate-800">
+                  <ChevronLeft size={16} />
+                </Button>
+                <Button variant="outline" size="sm" onClick={handleNextMonth} className="p-2 border-slate-200 dark:border-slate-800">
+                  <ChevronRight size={16} />
+                </Button>
+              </div>
             </div>
           </CardHeader>
           <CardContent className="p-4 sm:p-6">
@@ -319,11 +388,19 @@ export default function AttendancePage() {
               {calendarDays.map((day, idx) => {
                 const isToday = day === new Date().getDate() && currentMonth === new Date().getMonth() && currentYear === new Date().getFullYear();
                 const events = day ? getEventsOnDate(day) : [];
+                const formattedMonth = String(currentMonth + 1).padStart(2, '0');
+                const formattedDay = day ? String(day).padStart(2, '0') : '';
+                const dateStr = `${currentYear}-${formattedMonth}-${formattedDay}`;
 
                 return (
                   <div 
                     key={idx} 
-                    className={`border border-slate-100 dark:border-slate-800 rounded-2xl p-1.5 flex flex-col justify-between hover:bg-slate-50/50 dark:hover:bg-slate-800/30 transition-colors ${day ? 'bg-white dark:bg-slate-900' : 'bg-slate-50/20 dark:bg-slate-900/5'} ${isToday ? 'ring-2 ring-blue-500' : ''}`}
+                    onClick={() => {
+                      if (day && events.length > 0) {
+                        setSelectedDayModal({ day, dateStr, events });
+                      }
+                    }}
+                    className={`border border-slate-100 dark:border-slate-800 rounded-2xl p-1.5 flex flex-col justify-between transition-all ${day ? 'bg-white dark:bg-slate-900 hover:shadow-md cursor-pointer hover:border-blue-300 dark:hover:border-blue-800' : 'bg-slate-50/20 dark:bg-slate-900/5'} ${isToday ? 'ring-2 ring-blue-500' : ''}`}
                   >
                     {day ? (
                       <>
@@ -331,12 +408,17 @@ export default function AttendancePage() {
                           <span className={`text-xs font-bold ${isToday ? 'bg-blue-600 text-white w-5 h-5 rounded-full flex items-center justify-center' : 'text-slate-850 dark:text-slate-200'}`}>
                             {day}
                           </span>
+                          {events.length > 0 && (
+                            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
+                              {events.length}
+                            </span>
+                          )}
                         </div>
                         <div className="flex-1 overflow-y-auto mt-1 space-y-1 scrollbar-none max-h-[80px]">
                           {events.map((ev, evIdx) => (
                             <div 
                               key={evIdx} 
-                              className={`text-[8px] sm:text-[10px] font-semibold truncate rounded px-1 py-0.5 ${ev.color}`}
+                              className={`text-[8px] sm:text-[10px] font-semibold truncate rounded px-1.5 py-0.5 shadow-2xs ${ev.color}`}
                               title={ev.label}
                             >
                               {ev.label}
@@ -386,6 +468,60 @@ export default function AttendancePage() {
             <Button type="submit" className="bg-blue-600 hover:bg-blue-700 text-white">Record Check-in</Button>
           </div>
         </form>
+      </Modal>
+
+      {/* Selected Day Events Modal */}
+      <Modal 
+        isOpen={selectedDayModal !== null} 
+        onClose={() => setSelectedDayModal(null)} 
+        title={`Calendar Events - ${selectedDayModal?.dateStr}`}
+      >
+        {selectedDayModal && (
+          <div className="space-y-4">
+            <p className="text-xs text-slate-500 dark:text-slate-400">Events scheduled for {monthNames[currentMonth]} {selectedDayModal.day}, {currentYear}:</p>
+            <div className="space-y-2.5 max-h-[300px] overflow-y-auto">
+              {selectedDayModal.events.map((ev, idx) => (
+                <div key={idx} className={`p-3 rounded-xl flex items-center justify-between ${ev.color}`}>
+                  <div>
+                    <p className="font-bold text-sm">{ev.label}</p>
+                    {ev.member && (
+                      <p className="text-xs opacity-80 mt-0.5">
+                        Mobile: {ev.member.mobile} {ev.member.dob ? `| DOB: ${ev.member.dob}` : ""}
+                      </p>
+                    )}
+                  </div>
+                  {ev.type === "Birthday" && (
+                    <Button 
+                      size="sm" 
+                      className="bg-pink-600 hover:bg-pink-700 text-white text-xs gap-1"
+                      onClick={() => {
+                        toast.success(`🎉 Birthday wishes sent to ${ev.member?.name || 'Member'}!`);
+                        setSelectedDayModal(null);
+                      }}
+                    >
+                      🎉 Send Wish
+                    </Button>
+                  )}
+                  {ev.type === "Renewal" && (
+                    <Button 
+                      size="sm" 
+                      className="bg-amber-600 hover:bg-amber-700 text-white text-xs gap-1"
+                      onClick={() => {
+                        toast.info(`Renewal reminder triggered for ${ev.member?.name || 'Member'}`);
+                        setSelectedDayModal(null);
+                      }}
+                    >
+                      🔄 Send Reminder
+                    </Button>
+                  )}
+                </div>
+              ))}
+            </div>
+            <div className="flex justify-end pt-2">
+              <Button variant="ghost" onClick={() => setSelectedDayModal(null)}>Close</Button>
+            </div>
+          </div>
+        )}
       </Modal>
     </div>
   );

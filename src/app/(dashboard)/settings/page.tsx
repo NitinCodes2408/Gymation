@@ -188,10 +188,10 @@ export default function SettingsPage() {
                       onChange={(e) => setGymForm({ ...gymForm, currency: e.target.value })}
                       className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-805 dark:text-slate-100 focus:ring-2 focus:ring-blue-500 text-sm bg-white"
                     >
+                      <option value="₹">INR (₹) - Indian Rupee</option>
                       <option value="$">USD ($)</option>
                       <option value="€">EUR (€)</option>
                       <option value="£">GBP (£)</option>
-                      <option value="₹">INR (₹)</option>
                     </select>
                   </div>
                   <div className="space-y-1.5">
