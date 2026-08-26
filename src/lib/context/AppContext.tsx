@@ -220,42 +220,6 @@ export const getOwnerStorageKey = (email: string): string => {
   return `gym_owner_data_${sanitized}`;
 };
 
-// Default General Gym Membership Plans (Owner Pricing)
-const defaultPlans: MembershipPlan[] = [
-  { 
-    id: "P-3001", 
-    name: "General Package - 1 Month", 
-    price: 500, 
-    durationMonths: 1, 
-    description: "Access to gym floor and standard fitness equipment", 
-    status: "Active" 
-  },
-  { 
-    id: "P-3002", 
-    name: "General Package - 3 Months", 
-    price: 1200, 
-    durationMonths: 3, 
-    description: "Access to all general gym areas and cardio equipment", 
-    status: "Active" 
-  },
-  { 
-    id: "P-3003", 
-    name: "General Package - 6 Months", 
-    price: 2100, 
-    durationMonths: 6, 
-    description: "Includes gym floor access, cardio deck, and locker facilities", 
-    status: "Active" 
-  },
-  { 
-    id: "P-3004", 
-    name: "General Package - 1 Year", 
-    price: 3600, 
-    durationMonths: 12, 
-    description: "Full year all-access pass to gym floor, cardio equipment, and lockers", 
-    status: "Active" 
-  },
-];
-
 const defaultSettings: GymSettings = {
   gymName: "Gymation Fitness",
   email: "admin@gymation.com",
@@ -272,7 +236,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [isInitialized, setIsInitialized] = useState(false);
   const [members, setMembers] = useState<Member[]>([]);
   const [trainers, setTrainers] = useState<Trainer[]>([]);
-  const [plans, setPlans] = useState<MembershipPlan[]>(defaultPlans);
+  const [plans, setPlans] = useState<MembershipPlan[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [attendance, setAttendance] = useState<Attendance[]>([]);
@@ -292,7 +256,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       // User logged out: clear memory state
       setMembers([]);
       setTrainers([]);
-      setPlans(defaultPlans);
+      setPlans([]);
       setPayments([]);
       setExpenses([]);
       setAttendance([]);
@@ -325,7 +289,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // Apply owner data to state
     setMembers(ownerData.members || []);
     setTrainers(ownerData.trainers || []);
-    setPlans(ownerData.plans && ownerData.plans.length > 0 ? ownerData.plans : defaultPlans);
+    setPlans(ownerData.plans || []);
     setPayments(ownerData.payments || []);
     setExpenses(ownerData.expenses || []);
     setAttendance(ownerData.attendance || []);
@@ -351,7 +315,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return {
       members: [],
       trainers: [],
-      plans: defaultPlans,
+      plans: [],
       payments: [],
       expenses: [],
       attendance: [],
@@ -558,6 +522,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const newId = `M-${Math.floor(1000 + Math.random() * 9000)}`;
     const newMember: Member = {
       ...memberData,
+      dob: memberData.dob ? memberData.dob.trim() : "",
       id: newId,
     };
     setMembers((prev) => [...prev, newMember]);
@@ -586,7 +551,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             ];
           }
         }
-        return { ...m, ...updatedData, previousPlans } as Member;
+        return {
+          ...m,
+          ...updatedData,
+          dob: updatedData.dob !== undefined ? (updatedData.dob ? updatedData.dob.trim() : "") : m.dob,
+          previousPlans,
+        } as Member;
       })
     );
     addActivity("member_updated", `Updated member profile (${id})`);
@@ -643,6 +613,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const newId = `P-${Math.floor(3000 + Math.random() * 9000)}`;
     const newPlan: MembershipPlan = {
       ...planData,
+      name: planData.name.trim(),
+      price: Math.max(0, Number(planData.price) || 0),
+      durationMonths: Math.max(1, Math.round(Number(planData.durationMonths) || 1)),
+      description: planData.description ? planData.description.trim() : "",
+      status: planData.status || "Active",
       id: newId,
     };
     setPlans((prev) => [...prev, newPlan]);
@@ -652,7 +627,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const updatePlan = (id: string, updatedData: Partial<MembershipPlan>) => {
     setPlans((prev) =>
-      prev.map((p) => (p.id === id ? ({ ...p, ...updatedData } as MembershipPlan) : p))
+      prev.map((p) => {
+        if (p.id !== id) return p;
+        return {
+          ...p,
+          ...updatedData,
+          name: updatedData.name !== undefined ? updatedData.name.trim() : p.name,
+          price: updatedData.price !== undefined ? Math.max(0, Number(updatedData.price) || 0) : p.price,
+          durationMonths: updatedData.durationMonths !== undefined ? Math.max(1, Math.round(Number(updatedData.durationMonths) || 1)) : p.durationMonths,
+          description: updatedData.description !== undefined ? updatedData.description.trim() : p.description,
+          status: updatedData.status !== undefined ? updatedData.status : p.status,
+        } as MembershipPlan;
+      })
     );
     toast.success("Membership plan updated!");
   };

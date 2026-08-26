@@ -8,6 +8,7 @@ import { ArrowLeft, Save, X, Dumbbell, CreditCard } from "lucide-react";
 import { formatCurrency, formatIndianNumber } from "@/lib/utils";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 
 export default function AddMemberPage() {
   const router = useRouter();
@@ -21,12 +22,13 @@ export default function AddMemberPage() {
     dob: "",
     address: "",
     emergencyContact: "",
-    planId: plans[0]?.id || "",
+    planId: "",
     trainerId: "",
     notes: ""
   });
 
-  const selectedPlan = plans.find((p) => p.id === formData.planId) || plans[0];
+  const activePlanId = formData.planId || plans[0]?.id || "";
+  const selectedPlan = plans.find((p) => p.id === activePlanId);
   const selectedTrainer = trainers.find((t) => t.id === formData.trainerId);
 
   const membershipFee = selectedPlan ? selectedPlan.price : 0;
@@ -38,7 +40,13 @@ export default function AddMemberPage() {
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
 
-    const duration = selectedPlan ? selectedPlan.durationMonths : 1;
+    if (plans.length === 0) {
+      toast.error("Please create at least one membership plan before registering a member.");
+      return;
+    }
+
+    const plan = selectedPlan || plans[0];
+    const duration = plan ? plan.durationMonths : 1;
     const expiry = new Date();
     expiry.setMonth(expiry.getMonth() + duration);
 
@@ -49,10 +57,10 @@ export default function AddMemberPage() {
       mobile: formData.mobile,
       email: formData.email,
       gender: formData.gender,
-      dob: formData.dob,
+      dob: formData.dob ? formData.dob.trim() : "",
       address: formData.address,
       emergencyContact: formData.emergencyContact,
-      planId: formData.planId || plans[0]?.id || "",
+      planId: plan.id,
       trainerId: formData.trainerId,
       joinDate: new Date().toISOString().split("T")[0],
       expiryDate: expiry.toISOString().split("T")[0],
@@ -62,12 +70,12 @@ export default function AddMemberPage() {
     });
 
     // Create itemized payment in INR
-    if (selectedPlan) {
+    if (plan) {
       addPayment({
         memberId: newMemberId,
         memberName: formData.name,
-        planId: selectedPlan.id,
-        planName: selectedPlan.name,
+        planId: plan.id,
+        planName: plan.name,
         membershipAmount: membershipFee,
         ptAmount: ptFee,
         amount: totalAmount,
@@ -148,10 +156,9 @@ export default function AddMemberPage() {
                   </select>
                 </div>
                 <div className="space-y-1.5">
-                  <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Date of Birth *</label>
+                  <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Date of Birth</label>
                   <input 
                     type="date" 
-                    required
                     value={formData.dob}
                     onChange={(e) => setFormData({ ...formData, dob: e.target.value })}
                     className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 focus:ring-2 focus:ring-blue-500 outline-none transition-all text-sm" 
@@ -192,17 +199,27 @@ export default function AddMemberPage() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
               <div className="space-y-1.5">
                 <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Membership Plan *</label>
-                <select 
-                  value={formData.planId} 
-                  onChange={(e) => setFormData({ ...formData, planId: e.target.value })}
-                  className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 focus:ring-2 focus:ring-blue-500 outline-none transition-all text-sm"
-                >
-                  {plans.map((plan) => (
-                    <option key={plan.id} value={plan.id}>
-                      {plan.name} — {formatCurrency(plan.price)} ({plan.durationMonths} Mo)
-                    </option>
-                  ))}
-                </select>
+                {plans.length === 0 ? (
+                  <div className="p-3 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/50 rounded-xl flex items-center justify-between">
+                    <span className="text-xs text-amber-800 dark:text-amber-300 font-medium">No membership plans created yet.</span>
+                    <Link href="/membership-plans">
+                      <span className="text-xs font-bold text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1">+ Create Plan</span>
+                    </Link>
+                  </div>
+                ) : (
+                  <select 
+                    required
+                    value={activePlanId} 
+                    onChange={(e) => setFormData({ ...formData, planId: e.target.value })}
+                    className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 focus:ring-2 focus:ring-blue-500 outline-none transition-all text-sm"
+                  >
+                    {plans.map((plan) => (
+                      <option key={plan.id} value={plan.id}>
+                        {plan.name} — {plan.durationMonths === 1 ? "1 Month" : plan.durationMonths === 12 ? "1 Year" : `${plan.durationMonths} Months`} — {formatCurrency(plan.price)}
+                      </option>
+                    ))}
+                  </select>
+                )}
               </div>
 
               <div className="space-y-1.5">
@@ -238,7 +255,7 @@ export default function AddMemberPage() {
                   <p className="text-lg font-bold text-slate-800 dark:text-slate-100 mt-0.5">
                     {formatCurrency(membershipFee)}
                   </p>
-                  <p className="text-[10px] text-slate-400">{selectedPlan?.name || "Plan"}</p>
+                  <p className="text-[10px] text-slate-400">{selectedPlan?.name || "No Plan"}</p>
                 </div>
 
                 <div className="p-3 bg-white dark:bg-slate-900 rounded-xl border border-slate-100 dark:border-slate-800">
@@ -288,3 +305,4 @@ export default function AddMemberPage() {
     </div>
   );
 }
+

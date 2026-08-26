@@ -297,7 +297,7 @@ export default function MemberReportsPage() {
                                 </Badge>
                               </div>
                               <p className="text-xs text-blue-600 dark:text-blue-400 font-medium truncate mt-0.5">
-                                {plan?.name || "Standard Plan"}
+                                {plan?.name || "No Plan"}
                               </p>
                               <p className="text-[11px] text-slate-400 truncate">
                                 Trainer: {trainer?.name || "None"}
@@ -347,7 +347,7 @@ export default function MemberReportsPage() {
                               </Badge>
                             </div>
                             <p className="text-xs text-slate-500 dark:text-slate-400 truncate mt-0.5">
-                              {plan?.name || "Standard Plan"} • Coach: {trainer?.name || "None"}
+                              {plan?.name || "No Plan"} • Coach: {trainer?.name || "None"}
                             </p>
                           </div>
                         </div>
@@ -414,7 +414,7 @@ export default function MemberReportsPage() {
                   <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-blue-200 mt-2">
                     <span>Member ID: <strong className="text-white font-mono">{selectedMember.id}</strong></span>
                     <span>•</span>
-                    <span>Plan: <strong className="text-white">{memberPlan?.name || "Standard Plan"}</strong></span>
+                    <span>Plan: <strong className="text-white">{memberPlan?.name || "No Plan"}</strong></span>
                     <span>•</span>
                     <span>Assigned Coach: <strong className="text-white">{memberTrainer?.name || "None"}</strong></span>
                   </div>
@@ -784,11 +784,11 @@ export default function MemberReportsPage() {
                     <div className="p-4 bg-blue-50 dark:bg-blue-950/30 rounded-2xl border border-blue-100 dark:border-blue-900/50">
                       <div className="flex justify-between items-start">
                         <div>
-                          <h3 className="text-lg font-bold text-blue-900 dark:text-blue-300">{memberPlan?.name || "Standard Plan"}</h3>
-                          <p className="text-xs text-slate-600 dark:text-slate-400 mt-1">{memberPlan?.description}</p>
+                          <h3 className="text-lg font-bold text-blue-900 dark:text-blue-300">{memberPlan?.name || "No Plan Assigned"}</h3>
+                          <p className="text-xs text-slate-600 dark:text-slate-400 mt-1">{memberPlan?.description || "Membership subscription"}</p>
                         </div>
                         <span className="text-xl font-extrabold text-blue-700 dark:text-blue-300">
-                          {formatCurrency(memberPlan?.price)}
+                          {memberPlan ? formatCurrency(memberPlan.price) : "₹0"}
                         </span>
                       </div>
                     </div>
@@ -796,7 +796,7 @@ export default function MemberReportsPage() {
                     <div className="space-y-2 text-sm pt-2">
                       <div className="flex justify-between py-1.5 border-b border-slate-100 dark:border-slate-800">
                         <span className="text-slate-500">Plan Duration</span>
-                        <span className="font-bold">{memberPlan?.durationMonths} Months</span>
+                        <span className="font-bold">{memberPlan?.durationMonths ? (memberPlan.durationMonths === 1 ? "1 Month" : memberPlan.durationMonths === 12 ? "1 Year" : `${memberPlan.durationMonths} Months`) : "N/A"}</span>
                       </div>
                       <div className="flex justify-between py-1.5 border-b border-slate-100 dark:border-slate-800">
                         <span className="text-slate-500">Enrollment Start Date</span>

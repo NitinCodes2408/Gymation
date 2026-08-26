@@ -45,7 +45,7 @@ export default function MembersPage() {
     notes: ""
   });
 
-  const selectedPlan = plans.find((p) => p.id === formData.planId) || plans[0];
+  const selectedPlan = plans.find((p) => p.id === formData.planId) || (formData.planId ? undefined : plans[0]);
   const selectedTrainer = trainers.find((t) => t.id === formData.trainerId);
   const membershipFee = selectedPlan ? selectedPlan.price : 0;
   const ptFee = selectedTrainer
@@ -77,7 +77,7 @@ export default function MembersPage() {
       mobile: member.mobile,
       email: member.email,
       gender: member.gender,
-      dob: member.dob,
+      dob: member.dob || "",
       address: member.address,
       emergencyContact: member.emergencyContact,
       planId: member.planId,
@@ -89,6 +89,10 @@ export default function MembersPage() {
 
   const handleAddSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (plans.length === 0) {
+      toast.error("Please create at least one membership plan before registering a member.");
+      return;
+    }
     const plan = plans.find(p => p.id === formData.planId) || plans[0];
     const duration = plan ? plan.durationMonths : 1;
     const expiry = new Date();
@@ -101,10 +105,10 @@ export default function MembersPage() {
       mobile: formData.mobile,
       email: formData.email,
       gender: formData.gender,
-      dob: formData.dob,
+      dob: formData.dob ? formData.dob.trim() : "",
       address: formData.address,
       emergencyContact: formData.emergencyContact,
-      planId: formData.planId || plans[0]?.id || "",
+      planId: plan.id,
       trainerId: formData.trainerId,
       joinDate: new Date().toISOString().split("T")[0],
       expiryDate: expiry.toISOString().split("T")[0],
@@ -135,7 +139,10 @@ export default function MembersPage() {
   const handleEditSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (editMember) {
-      updateMember(editMember.id, formData);
+      updateMember(editMember.id, {
+        ...formData,
+        dob: formData.dob ? formData.dob.trim() : "",
+      });
       setEditMember(null);
     }
   };
@@ -399,6 +406,10 @@ export default function MembersPage() {
                   <p className="text-slate-800 dark:text-slate-200 mt-0.5">{viewMember.email || "N/A"}</p>
                 </div>
                 <div>
+                  <p className="text-xs font-bold text-slate-400 uppercase tracking-wide">Date of Birth</p>
+                  <p className="text-slate-800 dark:text-slate-200 mt-0.5">{viewMember.dob || "Not provided"}</p>
+                </div>
+                <div>
                   <p className="text-xs font-bold text-slate-400 uppercase tracking-wide">Assigned Trainer</p>
                   <p className="text-slate-800 dark:text-slate-200 mt-0.5 font-medium">
                     {t ? `${t.name} (${t.trainerType || "Personal Trainer"})` : "No trainer assigned"}
@@ -413,7 +424,7 @@ export default function MembersPage() {
                 <div>
                   <p className="text-xs font-bold text-slate-400 uppercase tracking-wide">Plan Subscription</p>
                   <p className="text-slate-800 dark:text-slate-200 mt-0.5">
-                    {plans.find(p => p.id === viewMember.planId)?.name || "N/A"}
+                    {plans.find(p => p.id === viewMember.planId)?.name || "No Plan"}
                   </p>
                 </div>
                 <div>
@@ -497,7 +508,15 @@ export default function MembersPage() {
             <div className="space-y-1.5">
               <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Plan Subscription *</label>
               <select value={formData.planId} onChange={(e) => setFormData({ ...formData, planId: e.target.value })} className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 text-sm">
-                {plans.map(p => <option key={p.id} value={p.id}>{p.name} - {formatCurrency(p.price)}</option>)}
+                {plans.length === 0 ? (
+                  <option value="" disabled>No plans created yet</option>
+                ) : (
+                  plans.map(p => (
+                    <option key={p.id} value={p.id}>
+                      {p.name} — {p.durationMonths === 1 ? "1 Month" : p.durationMonths === 12 ? "1 Year" : `${p.durationMonths} Months`} — {formatCurrency(p.price)}
+                    </option>
+                  ))
+                )}
               </select>
             </div>
             <div className="space-y-1.5">
@@ -577,7 +596,11 @@ export default function MembersPage() {
             <div className="space-y-1.5">
               <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Plan</label>
               <select value={formData.planId} onChange={(e) => setFormData({ ...formData, planId: e.target.value })} className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 text-sm">
-                {plans.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                {plans.map(p => (
+                  <option key={p.id} value={p.id}>
+                    {p.name} — {p.durationMonths === 1 ? "1 Month" : p.durationMonths === 12 ? "1 Year" : `${p.durationMonths} Months`} — {formatCurrency(p.price)}
+                  </option>
+                ))}
               </select>
             </div>
             <div className="space-y-1.5">

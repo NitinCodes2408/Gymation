@@ -20,8 +20,8 @@ export default function MembershipPlansPage() {
   // Form States for Plan
   const [planForm, setPlanForm] = useState({
     name: "",
-    price: 500,
-    durationMonths: 1,
+    price: 2500,
+    durationMonths: 3,
     description: "",
     status: "Active" as "Active" | "Inactive"
   });
@@ -38,7 +38,7 @@ export default function MembershipPlansPage() {
   };
 
   const handleOpenCreate = () => {
-    setPlanForm({ name: "", price: 500, durationMonths: 1, description: "", status: "Active" });
+    setPlanForm({ name: "", price: 2500, durationMonths: 3, description: "", status: "Active" });
     setIsCreateOpen(true);
   };
 
@@ -48,7 +48,7 @@ export default function MembershipPlansPage() {
       name: plan.name,
       price: plan.price,
       durationMonths: plan.durationMonths,
-      description: plan.description,
+      description: plan.description || "",
       status: plan.status
     });
     setIsEditOpen(true);
@@ -56,12 +56,36 @@ export default function MembershipPlansPage() {
 
   const handleCreateSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (!planForm.name.trim()) {
+      toast.error("Plan name is required");
+      return;
+    }
+    if (planForm.price < 0) {
+      toast.error("Plan price cannot be negative");
+      return;
+    }
+    if (planForm.durationMonths < 1) {
+      toast.error("Plan duration must be at least 1 month");
+      return;
+    }
     addPlan(planForm);
     setIsCreateOpen(false);
   };
 
   const handleEditSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (!planForm.name.trim()) {
+      toast.error("Plan name is required");
+      return;
+    }
+    if (planForm.price < 0) {
+      toast.error("Plan price cannot be negative");
+      return;
+    }
+    if (planForm.durationMonths < 1) {
+      toast.error("Plan duration must be at least 1 month");
+      return;
+    }
     if (selectedPlan) {
       updatePlan(selectedPlan.id, planForm);
       setIsEditOpen(false);
@@ -69,8 +93,15 @@ export default function MembershipPlansPage() {
   };
 
   const handleDelete = (id: string) => {
-    if (confirm("Are you sure you want to delete this membership plan?")) {
-      deletePlan(id);
+    const assignedCount = getMemberCount(id);
+    if (assignedCount > 0) {
+      if (confirm(`This plan is currently assigned to ${assignedCount} member(s). Are you sure you want to delete it?`)) {
+        deletePlan(id);
+      }
+    } else {
+      if (confirm("Are you sure you want to delete this membership plan?")) {
+        deletePlan(id);
+      }
     }
   };
 
@@ -132,14 +163,16 @@ export default function MembershipPlansPage() {
         <div>
           <h1 className="text-2xl font-bold text-slate-800 dark:text-slate-100 tracking-tight">Membership Plans</h1>
           <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
-            General gym membership packages with actual rates in Indian Rupees (₹).
+            Create and manage custom gym membership plans with duration and rates in Indian Rupees (₹).
           </p>
         </div>
         <div className="flex gap-2">
-          <Button onClick={() => setIsRenewOpen(true)} className="gap-2 bg-indigo-600 hover:bg-indigo-700 text-white">
-            <RefreshCw size={16} />
-            Renew Member
-          </Button>
+          {plans.length > 0 && (
+            <Button onClick={() => setIsRenewOpen(true)} className="gap-2 bg-indigo-600 hover:bg-indigo-700 text-white">
+              <RefreshCw size={16} />
+              Renew Member
+            </Button>
+          )}
           <Button onClick={handleOpenCreate} className="gap-2 bg-blue-600 hover:bg-blue-700 text-white">
             <Plus size={16} />
             Create Plan
@@ -147,87 +180,143 @@ export default function MembershipPlansPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6 py-4">
-        {plans.map((plan) => {
-          const count = getMemberCount(plan.id);
-          const isPopular = plan.durationMonths === 6 || plan.name.toLowerCase().includes("6 month");
+      {plans.length === 0 ? (
+        <div className="py-16 text-center bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 p-8 shadow-xs">
+          <div className="mx-auto w-14 h-14 rounded-2xl bg-blue-50 dark:bg-blue-950/50 flex items-center justify-center text-blue-600 dark:text-blue-400 mb-4 border border-blue-100 dark:border-blue-900/50">
+            <Plus size={28} />
+          </div>
+          <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100">No membership plans created yet</h3>
+          <p className="text-sm text-slate-500 dark:text-slate-400 mt-1.5 max-w-md mx-auto">
+            Create your gym's custom membership plans with flexible names, durations, and pricing in Indian Rupees (₹).
+          </p>
+          <div className="mt-6">
+            <Button onClick={handleOpenCreate} className="gap-2 bg-blue-600 hover:bg-blue-700 text-white">
+              <Plus size={16} />
+              Create Your First Plan
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6 py-4">
+          {plans.map((plan) => {
+            const count = getMemberCount(plan.id);
+            const isPopular = plan.durationMonths === 6 || plan.name.toLowerCase().includes("6 month");
 
-          return (
-            <div 
-              key={plan.id} 
-              className={`relative flex flex-col rounded-3xl border ${isPopular ? 'border-2 border-blue-500 shadow-xl' : 'border-slate-200 dark:border-slate-850 shadow-sm'} bg-white dark:bg-slate-900 overflow-hidden transition-transform hover:-translate-y-2 duration-300`}
-            >
-              {isPopular && (
-                <div className="absolute top-0 inset-x-0 bg-blue-500 text-white text-[10px] font-bold uppercase tracking-wider py-1.5 text-center flex items-center justify-center gap-1">
-                  <Star size={11} className="fill-white" />
-                  Most Popular
-                </div>
-              )}
-              
-              <div className={`p-6 sm:p-7 ${isPopular ? 'pt-10' : ''} border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50`}>
-                <div className="flex justify-between items-start">
-                  <div>
-                    <span className="text-[10px] font-extrabold uppercase tracking-widest text-blue-600 dark:text-blue-400">
-                      General Package
-                    </span>
-                    <h3 className="text-lg font-bold text-slate-800 dark:text-white mt-0.5">{plan.name}</h3>
+            return (
+              <div 
+                key={plan.id} 
+                className={`relative flex flex-col rounded-3xl border ${isPopular ? 'border-2 border-blue-500 shadow-xl' : 'border-slate-200 dark:border-slate-800 shadow-sm'} bg-white dark:bg-slate-900 overflow-hidden transition-transform hover:-translate-y-2 duration-300`}
+              >
+                {isPopular && (
+                  <div className="absolute top-0 inset-x-0 bg-blue-500 text-white text-[10px] font-bold uppercase tracking-wider py-1.5 text-center flex items-center justify-center gap-1">
+                    <Star size={11} className="fill-white" />
+                    Most Popular
                   </div>
-                  <Badge variant={plan.status === "Active" ? "success" : "danger"}>
-                    {plan.status}
-                  </Badge>
-                </div>
-                <p className="text-xs text-slate-500 dark:text-slate-400 mt-2 line-clamp-2 h-8">{plan.description}</p>
-                <div className="mt-5 flex items-baseline gap-1">
-                  <span className="text-3xl sm:text-4xl font-extrabold text-slate-900 dark:text-white">{formatCurrency(plan.price)}</span>
-                  <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">
-                    / {plan.durationMonths === 1 ? "1 Month" : plan.durationMonths === 12 ? "1 Year" : `${plan.durationMonths} Months`}
-                  </span>
-                </div>
-              </div>
-              
-              <div className="p-6 sm:p-7 flex-1 flex flex-col justify-between space-y-6">
-                <div>
-                  <div className="text-xs font-bold uppercase text-slate-400 tracking-wider mb-3">Subscription Metrics</div>
-                  <div className="bg-slate-50 dark:bg-slate-800/50 rounded-xl p-3 text-xs sm:text-sm text-slate-700 dark:text-slate-350">
-                    Active Subscribers: <strong className="text-slate-900 dark:text-white font-bold">{count} members</strong>
+                )}
+                
+                <div className={`p-6 sm:p-7 ${isPopular ? 'pt-10' : ''} border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50`}>
+                  <div className="flex justify-between items-start">
+                    <div className="flex-1 pr-2">
+                      <h3 className="text-lg font-bold text-slate-800 dark:text-white mt-0.5">{plan.name}</h3>
+                    </div>
+                    <Badge variant={plan.status === "Active" ? "success" : "danger"}>
+                      {plan.status}
+                    </Badge>
+                  </div>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-2 line-clamp-2 h-8">
+                    {plan.description || "Full access to gym facilities and equipment"}
+                  </p>
+                  <div className="mt-5 flex items-baseline gap-1">
+                    <span className="text-3xl sm:text-4xl font-extrabold text-slate-900 dark:text-white">{formatCurrency(plan.price)}</span>
+                    <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">
+                      / {plan.durationMonths === 1 ? "1 Month" : plan.durationMonths === 12 ? "1 Year" : `${plan.durationMonths} Months`}
+                    </span>
                   </div>
                 </div>
                 
-                <div className="space-y-3">
-                  <Button onClick={() => handleOpenRenew(plan.id)} variant={isPopular ? "primary" : "outline"} className="w-full h-10 text-xs font-semibold rounded-xl">
-                    Renew Member Subscription
-                  </Button>
-                  <div className="flex gap-2">
-                    <Button onClick={() => handleOpenEdit(plan)} variant="ghost" className="w-full text-xs gap-1.5"><Edit size={12} /> Edit</Button>
-                    <Button onClick={() => handleDelete(plan.id)} variant="ghost" className="w-full text-xs text-red-500 hover:text-red-650 hover:bg-red-50 dark:hover:bg-red-950/20 gap-1.5"><Trash2 size={12} /> Delete</Button>
+                <div className="p-6 sm:p-7 flex-1 flex flex-col justify-between space-y-6">
+                  <div>
+                    <div className="text-xs font-bold uppercase text-slate-400 tracking-wider mb-3">Subscription Metrics</div>
+                    <div className="bg-slate-50 dark:bg-slate-800/50 rounded-xl p-3 text-xs sm:text-sm text-slate-700 dark:text-slate-350">
+                      Active Subscribers: <strong className="text-slate-900 dark:text-white font-bold">{count} members</strong>
+                    </div>
+                  </div>
+                  
+                  <div className="space-y-3">
+                    <Button onClick={() => handleOpenRenew(plan.id)} variant={isPopular ? "primary" : "outline"} className="w-full h-10 text-xs font-semibold rounded-xl">
+                      Renew Member Subscription
+                    </Button>
+                    <div className="flex gap-2">
+                      <Button onClick={() => handleOpenEdit(plan)} variant="ghost" className="w-full text-xs gap-1.5"><Edit size={12} /> Edit</Button>
+                      <Button onClick={() => handleDelete(plan.id)} variant="ghost" className="w-full text-xs text-red-500 hover:text-red-650 hover:bg-red-50 dark:hover:bg-red-950/20 gap-1.5"><Trash2 size={12} /> Delete</Button>
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
-          );
-        })}
-      </div>
+            );
+          })}
+        </div>
+      )}
 
       {/* Create Plan Modal */}
       <Modal isOpen={isCreateOpen} onClose={() => setIsCreateOpen(false)} title="Create Membership Plan">
         <form onSubmit={handleCreateSubmit} className="space-y-4">
           <div className="space-y-1.5">
             <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Plan Name *</label>
-            <input type="text" required value={planForm.name} onChange={(e) => setPlanForm({ ...planForm, name: e.target.value })} className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 text-sm outline-none" placeholder="e.g. General Package - 1 Month" />
+            <input 
+              type="text" 
+              required 
+              value={planForm.name} 
+              onChange={(e) => setPlanForm({ ...planForm, name: e.target.value })} 
+              className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 text-sm outline-none" 
+              placeholder="e.g. Gold Fitness" 
+            />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Price (₹) *</label>
-              <input type="number" required value={planForm.price} onChange={(e) => setPlanForm({ ...planForm, price: Number(e.target.value) })} className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 text-sm" placeholder="500" />
+              <input 
+                type="number" 
+                required 
+                min={0}
+                value={planForm.price} 
+                onChange={(e) => setPlanForm({ ...planForm, price: Number(e.target.value) })} 
+                className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 text-sm" 
+                placeholder="2500" 
+              />
             </div>
             <div className="space-y-1.5">
               <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Duration (Months) *</label>
-              <input type="number" required value={planForm.durationMonths} onChange={(e) => setPlanForm({ ...planForm, durationMonths: Number(e.target.value) })} className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 text-sm" />
+              <input 
+                type="number" 
+                required 
+                min={1}
+                value={planForm.durationMonths} 
+                onChange={(e) => setPlanForm({ ...planForm, durationMonths: Number(e.target.value) })} 
+                className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 text-sm" 
+                placeholder="3"
+              />
             </div>
           </div>
           <div className="space-y-1.5">
-            <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Description</label>
-            <textarea value={planForm.description} onChange={(e) => setPlanForm({ ...planForm, description: e.target.value })} className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 text-sm h-16 resize-none outline-none" />
+            <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Description / Benefits</label>
+            <textarea 
+              value={planForm.description} 
+              onChange={(e) => setPlanForm({ ...planForm, description: e.target.value })} 
+              className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 text-sm h-16 resize-none outline-none" 
+              placeholder="e.g. Full access to cardio, strength zones and locker facilities"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Status</label>
+            <select 
+              value={planForm.status} 
+              onChange={(e) => setPlanForm({ ...planForm, status: e.target.value as "Active" | "Inactive" })} 
+              className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 text-sm"
+            >
+              <option value="Active">Active</option>
+              <option value="Inactive">Inactive</option>
+            </select>
           </div>
           <div className="flex justify-end gap-3 pt-2">
             <Button type="button" variant="ghost" onClick={() => setIsCreateOpen(false)}>Cancel</Button>
@@ -241,25 +330,53 @@ export default function MembershipPlansPage() {
         <form onSubmit={handleEditSubmit} className="space-y-4">
           <div className="space-y-1.5">
             <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Plan Name *</label>
-            <input type="text" required value={planForm.name} onChange={(e) => setPlanForm({ ...planForm, name: e.target.value })} className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 text-sm outline-none" />
+            <input 
+              type="text" 
+              required 
+              value={planForm.name} 
+              onChange={(e) => setPlanForm({ ...planForm, name: e.target.value })} 
+              className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 text-sm outline-none" 
+            />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Price (₹) *</label>
-              <input type="number" required value={planForm.price} onChange={(e) => setPlanForm({ ...planForm, price: Number(e.target.value) })} className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 text-sm" />
+              <input 
+                type="number" 
+                required 
+                min={0}
+                value={planForm.price} 
+                onChange={(e) => setPlanForm({ ...planForm, price: Number(e.target.value) })} 
+                className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 text-sm" 
+              />
             </div>
             <div className="space-y-1.5">
               <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Duration (Months) *</label>
-              <input type="number" required value={planForm.durationMonths} onChange={(e) => setPlanForm({ ...planForm, durationMonths: Number(e.target.value) })} className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 text-sm" />
+              <input 
+                type="number" 
+                required 
+                min={1}
+                value={planForm.durationMonths} 
+                onChange={(e) => setPlanForm({ ...planForm, durationMonths: Number(e.target.value) })} 
+                className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 text-sm" 
+              />
             </div>
           </div>
           <div className="space-y-1.5">
-            <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Description</label>
-            <textarea value={planForm.description} onChange={(e) => setPlanForm({ ...planForm, description: e.target.value })} className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 text-sm h-16 resize-none outline-none" />
+            <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Description / Benefits</label>
+            <textarea 
+              value={planForm.description} 
+              onChange={(e) => setPlanForm({ ...planForm, description: e.target.value })} 
+              className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 text-sm h-16 resize-none outline-none" 
+            />
           </div>
           <div className="space-y-1.5">
             <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Status</label>
-            <select value={planForm.status} onChange={(e) => setPlanForm({ ...planForm, status: e.target.value as any })} className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 text-sm">
+            <select 
+              value={planForm.status} 
+              onChange={(e) => setPlanForm({ ...planForm, status: e.target.value as "Active" | "Inactive" })} 
+              className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 text-sm"
+            >
               <option value="Active">Active</option>
               <option value="Inactive">Inactive</option>
             </select>
@@ -302,7 +419,7 @@ export default function MembershipPlansPage() {
               <option value="">Select Plan</option>
               {plans.map(p => (
                 <option key={p.id} value={p.id}>
-                  {p.name} — {formatCurrency(p.price)} ({p.durationMonths === 12 ? "1 Year" : `${p.durationMonths} Months`})
+                  {p.name} — {p.durationMonths === 1 ? "1 Month" : p.durationMonths === 12 ? "1 Year" : `${p.durationMonths} Months`} — {formatCurrency(p.price)}
                 </option>
               ))}
             </select>

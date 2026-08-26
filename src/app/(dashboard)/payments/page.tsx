@@ -121,7 +121,7 @@ export default function PaymentsPage() {
       memberId: member.id,
       memberName: member.name,
       planId: plan?.id || "",
-      planName: plan?.name || "Premium Plan",
+      planName: plan?.name || "Membership Plan",
       membershipAmount: formMemAmount,
       ptAmount: formPtAmount,
       amount: formTotalAmount,

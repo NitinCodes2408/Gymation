@@ -168,6 +168,10 @@ export default function Dashboard() {
   // Modal Submit Handlers
   const handleAddMember = (e: React.FormEvent) => {
     e.preventDefault();
+    if (plans.length === 0) {
+      toast.error("Please create at least one membership plan before registering a member.");
+      return;
+    }
     const plan = plans.find(p => p.id === memberForm.planId) || plans[0];
     const duration = plan ? plan.durationMonths : 1;
     const expiry = new Date();
@@ -180,10 +184,10 @@ export default function Dashboard() {
       mobile: memberForm.mobile,
       email: memberForm.email,
       gender: memberForm.gender,
-      dob: memberForm.dob,
+      dob: memberForm.dob ? memberForm.dob.trim() : "",
       address: memberForm.address,
       emergencyContact: memberForm.emergencyContact,
-      planId: memberForm.planId || plans[0]?.id || "",
+      planId: plan.id,
       trainerId: memberForm.trainerId,
       joinDate: new Date().toISOString().split("T")[0],
       expiryDate: expiry.toISOString().split("T")[0],
@@ -200,7 +204,7 @@ export default function Dashboard() {
       memberId: newMemberId,
       memberName: memberForm.name,
       planId: plan?.id || "",
-      planName: plan?.name || "Standard Plan",
+      planName: plan?.name || "Membership Plan",
       membershipAmount: memFee,
       ptAmount: ptFee,
       amount: memFee + ptFee,
@@ -240,15 +244,19 @@ export default function Dashboard() {
 
   const handleAddPlan = (e: React.FormEvent) => {
     e.preventDefault();
+    if (!planForm.name.trim()) {
+      toast.error("Plan name is required");
+      return;
+    }
     addPlan({
       name: planForm.name,
-      price: Number(planForm.price),
-      durationMonths: Number(planForm.durationMonths),
+      price: Math.max(0, Number(planForm.price) || 0),
+      durationMonths: Math.max(1, Math.round(Number(planForm.durationMonths) || 1)),
       description: planForm.description,
       status: "Active"
     });
     setIsAddPlanOpen(false);
-    setPlanForm({ name: "", price: 999, durationMonths: 1, description: "" });
+    setPlanForm({ name: "", price: 2500, durationMonths: 3, description: "" });
   };
 
   const handleAddPayment = (e: React.FormEvent) => {
@@ -267,7 +275,7 @@ export default function Dashboard() {
       memberId: member.id,
       memberName: member.name,
       planId: plan?.id || "",
-      planName: plan?.name || "Standard Plan",
+      planName: plan?.name || "Membership Plan",
       membershipAmount: memFee,
       ptAmount: ptFee,
       amount: memFee + ptFee,
@@ -608,8 +616,8 @@ export default function Dashboard() {
               </select>
             </div>
             <div className="space-y-1">
-              <label className="text-xs font-bold text-slate-500 uppercase">Date of Birth (DOB) *</label>
-              <input type="date" required value={memberForm.dob} onChange={(e) => setMemberForm({ ...memberForm, dob: e.target.value })} className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 text-sm outline-none" />
+              <label className="text-xs font-bold text-slate-500 uppercase">Date of Birth (DOB)</label>
+              <input type="date" value={memberForm.dob} onChange={(e) => setMemberForm({ ...memberForm, dob: e.target.value })} className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 text-sm outline-none" />
             </div>
           </div>
           <div className="grid grid-cols-2 gap-3">
@@ -617,7 +625,11 @@ export default function Dashboard() {
               <label className="text-xs font-bold text-slate-500 uppercase">Plan *</label>
               <select required value={memberForm.planId} onChange={(e) => setMemberForm({ ...memberForm, planId: e.target.value })} className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 text-sm">
                 <option value="">Select Plan</option>
-                {plans.map(p => <option key={p.id} value={p.id}>{p.name} - {formatCurrency(p.price)}</option>)}
+                {plans.map(p => (
+                  <option key={p.id} value={p.id}>
+                    {p.name} — {p.durationMonths === 1 ? "1 Month" : p.durationMonths === 12 ? "1 Year" : `${p.durationMonths} Months`} — {formatCurrency(p.price)}
+                  </option>
+                ))}
               </select>
             </div>
             <div className="space-y-1">
