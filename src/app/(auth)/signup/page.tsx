@@ -76,8 +76,8 @@ export default function SignUpPage() {
     const result = await register({ name, gymName, email, phone, password });
 
     if (result.success) {
-      toast.success("Gym Owner account registered successfully! Welcome to Gymation.");
-      router.push("/");
+      toast.success("Account created successfully. Please login to continue.");
+      router.push("/login");
     } else {
       toast.error(result.error || "Registration failed");
       setIsSubmitting(false);

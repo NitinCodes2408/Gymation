@@ -11,7 +11,8 @@ import {
   onAuthStateChanged,
   type User as FirebaseUser,
 } from "firebase/auth";
-import { auth, isFirebaseConfigured } from "@/lib/firebase/config";
+import { doc, setDoc, getDoc } from "firebase/firestore";
+import { auth, db, isFirebaseConfigured } from "@/lib/firebase/config";
 import { getFirebaseAuthErrorMessage } from "@/lib/firebase/errors";
 import type { User } from "@/lib/auth/types";
 import { validateEmail, validatePassword, validateGymName, validateName, validatePhone, validateLoginPassword } from "@/lib/auth/validation";
@@ -60,26 +61,6 @@ function saveUserMeta(userIdOrEmail: string, meta: UserProfileMeta) {
   }
 }
 
-function mapFirebaseUserToGymUser(fbUser: FirebaseUser): User {
-  const meta = {
-    ...getUserMeta(fbUser.uid),
-    ...(fbUser.email ? getUserMeta(fbUser.email) : {}),
-  };
-
-  const name =
-    fbUser.displayName ||
-    (fbUser.email ? fbUser.email.split("@")[0] : "Gym Owner");
-
-  return {
-    id: fbUser.uid,
-    email: fbUser.email || "",
-    name,
-    gymName: meta.gymName || "Gymation Fitness",
-    phone: meta.phone || fbUser.phoneNumber || "",
-    role: meta.role || "Gym Owner",
-  };
-}
-
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
   const [firebaseUser, setFirebaseUser] = useState<FirebaseUser | null>(null);
@@ -89,10 +70,41 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(
       auth,
-      (fbUser) => {
+      async (fbUser) => {
         if (fbUser) {
+          let meta = {
+            ...getUserMeta(fbUser.uid),
+            ...(fbUser.email ? getUserMeta(fbUser.email) : {}),
+          };
+
+          // Try fetching extra profile data from Firestore
+          try {
+            const userDocRef = doc(db, "users", fbUser.uid);
+            const userDocSnap = await getDoc(userDocRef);
+            if (userDocSnap.exists()) {
+              const docData = userDocSnap.data();
+              meta = {
+                gymName: docData.gymName || meta.gymName,
+                phone: docData.phone || meta.phone,
+                role: docData.role || meta.role,
+              };
+              saveUserMeta(fbUser.uid, meta);
+            }
+          } catch {
+            // Fallback to local meta
+          }
+
+          const gymUser: User = {
+            id: fbUser.uid,
+            email: fbUser.email || "",
+            name: fbUser.displayName || (fbUser.email ? fbUser.email.split("@")[0] : "Gym Owner"),
+            gymName: meta.gymName || "Gymation Fitness",
+            phone: meta.phone || fbUser.phoneNumber || "",
+            role: meta.role || "Gym Owner",
+          };
+
           setFirebaseUser(fbUser);
-          setUser(mapFirebaseUserToGymUser(fbUser));
+          setUser(gymUser);
         } else {
           setFirebaseUser(null);
           setUser(null);
@@ -127,9 +139,40 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       try {
         const userCredential = await signInWithEmailAndPassword(auth, email.trim(), password);
-        const loggedInUser = mapFirebaseUserToGymUser(userCredential.user);
-        setUser(loggedInUser);
-        setFirebaseUser(userCredential.user);
+        const fbUser = userCredential.user;
+
+        let meta = {
+          ...getUserMeta(fbUser.uid),
+          ...(fbUser.email ? getUserMeta(fbUser.email) : {}),
+        };
+
+        try {
+          const userDocRef = doc(db, "users", fbUser.uid);
+          const userDocSnap = await getDoc(userDocRef);
+          if (userDocSnap.exists()) {
+            const docData = userDocSnap.data();
+            meta = {
+              gymName: docData.gymName || meta.gymName,
+              phone: docData.phone || meta.phone,
+              role: docData.role || meta.role,
+            };
+            saveUserMeta(fbUser.uid, meta);
+          }
+        } catch {
+          // Fallback to local meta
+        }
+
+        const gymUser: User = {
+          id: fbUser.uid,
+          email: fbUser.email || "",
+          name: fbUser.displayName || (fbUser.email ? fbUser.email.split("@")[0] : "Gym Owner"),
+          gymName: meta.gymName || "Gymation Fitness",
+          phone: meta.phone || fbUser.phoneNumber || "",
+          role: meta.role || "Gym Owner",
+        };
+
+        setUser(gymUser);
+        setFirebaseUser(fbUser);
         return { success: true };
       } catch (err: unknown) {
         const errorMessage = getFirebaseAuthErrorMessage(err);
@@ -176,6 +219,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           data.password
         );
 
+        const uid = userCredential.user.uid;
+
         // Update display name in Firebase Auth
         if (data.name.trim()) {
           try {
@@ -187,26 +232,34 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           }
         }
 
-        // Save gym owner metadata (gymName, phone, role)
+        // Save gym owner metadata locally
         const meta: UserProfileMeta = {
           gymName: data.gymName.trim(),
           phone: data.phone.trim(),
           role: "Gym Owner",
         };
-        saveUserMeta(userCredential.user.uid, meta);
+        saveUserMeta(uid, meta);
         saveUserMeta(data.email.trim(), meta);
 
-        const newUser: User = {
-          id: userCredential.user.uid,
-          email: userCredential.user.email || data.email.trim(),
-          name: data.name.trim(),
-          gymName: data.gymName.trim(),
-          phone: data.phone.trim(),
-          role: "Gym Owner",
-        };
+        // Save owner profile document in Firestore
+        try {
+          await setDoc(doc(db, "users", uid), {
+            uid,
+            name: data.name.trim(),
+            gymName: data.gymName.trim(),
+            email: data.email.trim().toLowerCase(),
+            phone: data.phone.trim(),
+            role: "Gym Owner",
+            createdAt: new Date().toISOString(),
+          });
+        } catch (firestoreErr) {
+          console.warn("Firestore profile save notice (fallback to local metadata):", firestoreErr);
+        }
 
-        setUser(newUser);
-        setFirebaseUser(userCredential.user);
+        // IMPORTANT: Explicitly sign out so the user is NOT automatically logged in after registration
+        await signOut(auth);
+        setUser(null);
+        setFirebaseUser(null);
 
         return { success: true };
       } catch (err: unknown) {
