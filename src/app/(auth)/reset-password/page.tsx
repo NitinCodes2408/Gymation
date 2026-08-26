@@ -17,7 +17,7 @@ function ResetPasswordForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { resetPassword } = useAuth();
-  const token = searchParams.get("token") || "";
+  const token = searchParams.get("oobCode") || searchParams.get("token") || "";
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [password, setPassword] = useState("");

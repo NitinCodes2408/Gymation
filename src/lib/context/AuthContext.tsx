@@ -1,260 +1,288 @@
 "use client";
 
 import React, { createContext, useContext, useState, useEffect, useCallback } from "react";
-import type { User, StoredUser, AuthSession, ResetToken } from "@/lib/auth/types";
-import { AUTH_KEY, USERS_KEY, RESET_TOKENS_KEY, DEFAULT_USERS } from "@/lib/auth/constants";
-import { validateEmail, validatePassword, validateGymName, validateName, validatePhone } from "@/lib/auth/validation";
+import {
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  signOut,
+  sendPasswordResetEmail,
+  confirmPasswordReset,
+  updateProfile,
+  onAuthStateChanged,
+  type User as FirebaseUser,
+} from "firebase/auth";
+import { auth, isFirebaseConfigured } from "@/lib/firebase/config";
+import { getFirebaseAuthErrorMessage } from "@/lib/firebase/errors";
+import type { User } from "@/lib/auth/types";
+import { validateEmail, validatePassword, validateGymName, validateName, validatePhone, validateLoginPassword } from "@/lib/auth/validation";
+
+interface UserProfileMeta {
+  gymName?: string;
+  phone?: string;
+  role?: string;
+}
 
 interface AuthContextType {
   user: User | null;
+  firebaseUser: FirebaseUser | null;
   isAuthenticated: boolean;
   isLoading: boolean;
   login: (email: string, password: string, rememberMe?: boolean) => Promise<{ success: boolean; error?: string }>;
   register: (data: { name: string; gymName: string; email: string; phone: string; password: string }) => Promise<{ success: boolean; error?: string }>;
-  logout: () => void;
-  requestPasswordReset: (email: string) => Promise<{ success: boolean; error?: string; token?: string }>;
+  logout: () => Promise<void>;
+  requestPasswordReset: (email: string) => Promise<{ success: boolean; error?: string }>;
   resetPassword: (token: string, newPassword: string) => Promise<{ success: boolean; error?: string }>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-function getUsers(): StoredUser[] {
-  if (typeof window === "undefined") return DEFAULT_USERS;
-  const stored = localStorage.getItem(USERS_KEY);
-  if (stored) {
-    try {
-      const parsed = JSON.parse(stored) as StoredUser[];
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        // Ensure default seed accounts exist for testing
-        const existingEmails = new Set(parsed.map(u => u.email.toLowerCase()));
-        let needsUpdate = false;
-        const merged = [...parsed];
-        for (const defaultUser of DEFAULT_USERS) {
-          if (!existingEmails.has(defaultUser.email.toLowerCase())) {
-            merged.push(defaultUser);
-            needsUpdate = true;
-          }
-        }
-        if (needsUpdate) {
-          localStorage.setItem(USERS_KEY, JSON.stringify(merged));
-        }
-        return merged;
-      }
-    } catch {
-      // Fallback
-    }
-  }
-  localStorage.setItem(USERS_KEY, JSON.stringify(DEFAULT_USERS));
-  return DEFAULT_USERS;
-}
+const USER_META_PREFIX = "gymation_user_meta_";
 
-function saveUsers(users: StoredUser[]) {
-  if (typeof window === "undefined") return;
-  localStorage.setItem(USERS_KEY, JSON.stringify(users));
-}
-
-function getResetTokens(): ResetToken[] {
-  if (typeof window === "undefined") return [];
-  const stored = localStorage.getItem(RESET_TOKENS_KEY);
-  if (stored) {
-    try {
-      return JSON.parse(stored) as ResetToken[];
-    } catch {
-      return [];
-    }
-  }
-  return [];
-}
-
-function saveResetTokens(tokens: ResetToken[]) {
-  if (typeof window === "undefined") return;
-  localStorage.setItem(RESET_TOKENS_KEY, JSON.stringify(tokens));
-}
-
-function persistSession(session: AuthSession, rememberMe: boolean) {
-  if (typeof window === "undefined") return;
-  const data = JSON.stringify(session);
-  if (rememberMe) {
-    localStorage.setItem(AUTH_KEY, data);
-    sessionStorage.removeItem(AUTH_KEY);
-  } else {
-    sessionStorage.setItem(AUTH_KEY, data);
-    localStorage.removeItem(AUTH_KEY);
-  }
-}
-
-function loadSession(): AuthSession | null {
-  if (typeof window === "undefined") return null;
-  const stored = localStorage.getItem(AUTH_KEY) || sessionStorage.getItem(AUTH_KEY);
-  if (!stored) return null;
+function getUserMeta(userIdOrEmail: string): UserProfileMeta {
+  if (typeof window === "undefined") return {};
   try {
-    return JSON.parse(stored) as AuthSession;
+    const raw = localStorage.getItem(`${USER_META_PREFIX}${userIdOrEmail.toLowerCase()}`);
+    if (raw) {
+      return JSON.parse(raw) as UserProfileMeta;
+    }
   } catch {
-    return null;
+    // Ignore parse error
+  }
+  return {};
+}
+
+function saveUserMeta(userIdOrEmail: string, meta: UserProfileMeta) {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(`${USER_META_PREFIX}${userIdOrEmail.toLowerCase()}`, JSON.stringify(meta));
+  } catch {
+    // Ignore storage error
   }
 }
 
-function clearSession() {
-  if (typeof window === "undefined") return;
-  localStorage.removeItem(AUTH_KEY);
-  sessionStorage.removeItem(AUTH_KEY);
-}
+function mapFirebaseUserToGymUser(fbUser: FirebaseUser): User {
+  const meta = {
+    ...getUserMeta(fbUser.uid),
+    ...(fbUser.email ? getUserMeta(fbUser.email) : {}),
+  };
 
-function sessionToUser(session: AuthSession): User {
+  const name =
+    fbUser.displayName ||
+    (fbUser.email ? fbUser.email.split("@")[0] : "Gym Owner");
+
   return {
-    id: session.userId,
-    email: session.email,
-    name: session.name,
-    gymName: session.gymName || "Gymation Fitness",
-    phone: session.phone,
-    role: session.role || "Gym Owner",
+    id: fbUser.uid,
+    email: fbUser.email || "",
+    name,
+    gymName: meta.gymName || "Gymation Fitness",
+    phone: meta.phone || fbUser.phoneNumber || "",
+    role: meta.role || "Gym Owner",
   };
 }
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
+  const [firebaseUser, setFirebaseUser] = useState<FirebaseUser | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
+  // Subscribe to Firebase Auth state changes
   useEffect(() => {
-    const session = loadSession();
-    if (session) {
-      setUser(sessionToUser(session));
-    }
-    setIsLoading(false);
-  }, []);
-
-  const login = useCallback(async (email: string, password: string, rememberMe = false) => {
-    const emailError = validateEmail(email);
-    if (emailError) return { success: false, error: emailError };
-    if (!password) return { success: false, error: "Password is required" };
-
-    const users = getUsers();
-    const found = users.find((u) => u.email.toLowerCase() === email.trim().toLowerCase());
-
-    if (!found || found.password !== password) {
-      return { success: false, error: "Invalid email or password." };
-    }
-
-    const session: AuthSession = {
-      userId: found.id,
-      email: found.email,
-      name: found.name,
-      gymName: found.gymName || "Gymation Fitness",
-      phone: found.phone,
-      role: found.role || "Gym Owner",
-    };
-
-    persistSession(session, rememberMe);
-    setUser(sessionToUser(session));
-    return { success: true };
-  }, []);
-
-  const register = useCallback(async (data: { name: string; gymName: string; email: string; phone: string; password: string }) => {
-    const nameErr = validateName(data.name);
-    if (nameErr) return { success: false, error: nameErr };
-
-    const gymErr = validateGymName(data.gymName);
-    if (gymErr) return { success: false, error: gymErr };
-
-    const emailErr = validateEmail(data.email);
-    if (emailErr) return { success: false, error: emailErr };
-
-    const phoneErr = validatePhone(data.phone);
-    if (phoneErr) return { success: false, error: phoneErr };
-
-    const passErr = validatePassword(data.password);
-    if (passErr) return { success: false, error: passErr };
-
-    const users = getUsers();
-    const exists = users.some((u) => u.email.toLowerCase() === data.email.trim().toLowerCase());
-
-    if (exists) {
-      return { success: false, error: "An account with this email already exists." };
-    }
-
-    const newUser: StoredUser = {
-      id: `user-${Date.now()}`,
-      email: data.email.trim().toLowerCase(),
-      name: data.name.trim(),
-      gymName: data.gymName.trim(),
-      phone: data.phone.trim(),
-      password: data.password,
-      role: "Gym Owner",
-      createdAt: new Date().toISOString(),
-    };
-
-    saveUsers([...users, newUser]);
-
-    // Automatically create session for the newly registered gym owner
-    const session: AuthSession = {
-      userId: newUser.id,
-      email: newUser.email,
-      name: newUser.name,
-      gymName: newUser.gymName,
-      phone: newUser.phone,
-      role: newUser.role,
-    };
-    persistSession(session, true);
-    setUser(sessionToUser(session));
-
-    return { success: true };
-  }, []);
-
-  const logout = useCallback(() => {
-    clearSession();
-    setUser(null);
-  }, []);
-
-  const requestPasswordReset = useCallback(async (email: string) => {
-    const emailError = validateEmail(email);
-    if (emailError) return { success: false, error: emailError };
-
-    const users = getUsers();
-    const userExists = users.some((u) => u.email.toLowerCase() === email.trim().toLowerCase());
-
-    if (!userExists) {
-      return { success: false, error: "No account found with this email address." };
-    }
-
-    const token = Math.random().toString(36).substring(2) + Date.now().toString(36);
-    const expiresAt = Date.now() + 15 * 60 * 1000; // 15 mins
-
-    const tokens = getResetTokens().filter((t) => t.email.toLowerCase() !== email.trim().toLowerCase());
-    tokens.push({ email: email.trim().toLowerCase(), token, expiresAt });
-    saveResetTokens(tokens);
-
-    return { success: true, token };
-  }, []);
-
-  const resetPassword = useCallback(async (token: string, newPassword: string) => {
-    const passwordError = validatePassword(newPassword);
-    if (passwordError) return { success: false, error: passwordError };
-
-    const tokens = getResetTokens();
-    const validToken = tokens.find((t) => t.token === token && t.expiresAt > Date.now());
-
-    if (!validToken) {
-      return { success: false, error: "Reset link is invalid or has expired." };
-    }
-
-    const users = getUsers();
-    const updatedUsers = users.map((u) => {
-      if (u.email.toLowerCase() === validToken.email.toLowerCase()) {
-        return { ...u, password: newPassword };
+    const unsubscribe = onAuthStateChanged(
+      auth,
+      (fbUser) => {
+        if (fbUser) {
+          setFirebaseUser(fbUser);
+          setUser(mapFirebaseUserToGymUser(fbUser));
+        } else {
+          setFirebaseUser(null);
+          setUser(null);
+        }
+        setIsLoading(false);
+      },
+      (error) => {
+        console.error("Firebase auth state listener error:", error);
+        setFirebaseUser(null);
+        setUser(null);
+        setIsLoading(false);
       }
-      return u;
-    });
+    );
 
-    saveUsers(updatedUsers);
-    saveResetTokens(tokens.filter((t) => t.token !== token));
-
-    return { success: true };
+    return () => unsubscribe();
   }, []);
+
+  const login = useCallback(
+    async (email: string, password: string): Promise<{ success: boolean; error?: string }> => {
+      const emailError = validateEmail(email);
+      if (emailError) return { success: false, error: emailError };
+
+      const passError = validateLoginPassword(password);
+      if (passError) return { success: false, error: passError };
+
+      if (!isFirebaseConfigured()) {
+        return {
+          success: false,
+          error: "Firebase is not configured. Please check your environment variables.",
+        };
+      }
+
+      try {
+        const userCredential = await signInWithEmailAndPassword(auth, email.trim(), password);
+        const loggedInUser = mapFirebaseUserToGymUser(userCredential.user);
+        setUser(loggedInUser);
+        setFirebaseUser(userCredential.user);
+        return { success: true };
+      } catch (err: unknown) {
+        const errorMessage = getFirebaseAuthErrorMessage(err);
+        return { success: false, error: errorMessage };
+      }
+    },
+    []
+  );
+
+  const register = useCallback(
+    async (data: {
+      name: string;
+      gymName: string;
+      email: string;
+      phone: string;
+      password: string;
+    }): Promise<{ success: boolean; error?: string }> => {
+      const nameErr = validateName(data.name);
+      if (nameErr) return { success: false, error: nameErr };
+
+      const gymErr = validateGymName(data.gymName);
+      if (gymErr) return { success: false, error: gymErr };
+
+      const emailErr = validateEmail(data.email);
+      if (emailErr) return { success: false, error: emailErr };
+
+      const phoneErr = validatePhone(data.phone);
+      if (phoneErr) return { success: false, error: phoneErr };
+
+      const passErr = validatePassword(data.password);
+      if (passErr) return { success: false, error: passErr };
+
+      if (!isFirebaseConfigured()) {
+        return {
+          success: false,
+          error: "Firebase is not configured. Please check your environment variables.",
+        };
+      }
+
+      try {
+        const userCredential = await createUserWithEmailAndPassword(
+          auth,
+          data.email.trim(),
+          data.password
+        );
+
+        // Update display name in Firebase Auth
+        if (data.name.trim()) {
+          try {
+            await updateProfile(userCredential.user, {
+              displayName: data.name.trim(),
+            });
+          } catch (profileErr) {
+            console.warn("Failed to set display name on Firebase user:", profileErr);
+          }
+        }
+
+        // Save gym owner metadata (gymName, phone, role)
+        const meta: UserProfileMeta = {
+          gymName: data.gymName.trim(),
+          phone: data.phone.trim(),
+          role: "Gym Owner",
+        };
+        saveUserMeta(userCredential.user.uid, meta);
+        saveUserMeta(data.email.trim(), meta);
+
+        const newUser: User = {
+          id: userCredential.user.uid,
+          email: userCredential.user.email || data.email.trim(),
+          name: data.name.trim(),
+          gymName: data.gymName.trim(),
+          phone: data.phone.trim(),
+          role: "Gym Owner",
+        };
+
+        setUser(newUser);
+        setFirebaseUser(userCredential.user);
+
+        return { success: true };
+      } catch (err: unknown) {
+        const errorMessage = getFirebaseAuthErrorMessage(err);
+        return { success: false, error: errorMessage };
+      }
+    },
+    []
+  );
+
+  const logout = useCallback(async () => {
+    try {
+      await signOut(auth);
+    } catch (err) {
+      console.error("Sign out error:", err);
+    } finally {
+      setUser(null);
+      setFirebaseUser(null);
+    }
+  }, []);
+
+  const requestPasswordReset = useCallback(
+    async (email: string): Promise<{ success: boolean; error?: string }> => {
+      const emailError = validateEmail(email);
+      if (emailError) return { success: false, error: emailError };
+
+      if (!isFirebaseConfigured()) {
+        return {
+          success: false,
+          error: "Firebase is not configured. Please check your environment variables.",
+        };
+      }
+
+      try {
+        await sendPasswordResetEmail(auth, email.trim());
+        return { success: true };
+      } catch (err: unknown) {
+        const errorMessage = getFirebaseAuthErrorMessage(err);
+        return { success: false, error: errorMessage };
+      }
+    },
+    []
+  );
+
+  const resetPassword = useCallback(
+    async (token: string, newPassword: string): Promise<{ success: boolean; error?: string }> => {
+      const passwordError = validatePassword(newPassword);
+      if (passwordError) return { success: false, error: passwordError };
+
+      if (!token) {
+        return { success: false, error: "Invalid or missing reset token." };
+      }
+
+      if (!isFirebaseConfigured()) {
+        return {
+          success: false,
+          error: "Firebase is not configured. Please check your environment variables.",
+        };
+      }
+
+      try {
+        await confirmPasswordReset(auth, token, newPassword);
+        return { success: true };
+      } catch (err: unknown) {
+        const errorMessage = getFirebaseAuthErrorMessage(err);
+        return { success: false, error: errorMessage };
+      }
+    },
+    []
+  );
 
   return (
     <AuthContext.Provider
       value={{
         user,
+        firebaseUser,
         isAuthenticated: !!user,
         isLoading,
         login,

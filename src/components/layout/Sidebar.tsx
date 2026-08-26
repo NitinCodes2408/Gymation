@@ -1,6 +1,5 @@
 "use client";
 
-import { useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { 
@@ -50,8 +49,8 @@ export default function Sidebar({ isOpenMobile, setIsOpenMobile, isCollapsed, se
   const router = useRouter();
   const { logout } = useAuth();
 
-  const handleLogout = () => {
-    logout();
+  const handleLogout = async () => {
+    await logout();
     toast.success("Logged out successfully.");
     router.push("/login");
   };

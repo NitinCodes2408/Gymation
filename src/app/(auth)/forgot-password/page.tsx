@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { Mail, ArrowRight, ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { toast } from "sonner";
@@ -12,7 +11,6 @@ import AuthInput from "@/components/auth/AuthInput";
 import { validateEmail } from "@/lib/auth/validation";
 
 export default function ForgotPasswordPage() {
-  const router = useRouter();
   const { requestPasswordReset } = useAuth();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [email, setEmail] = useState("");
@@ -35,12 +33,9 @@ export default function ForgotPasswordPage() {
     setIsSubmitting(true);
     const result = await requestPasswordReset(email);
 
-    if (result.success && result.token) {
+    if (result.success) {
       setSent(true);
-      toast.success("Reset link generated! Redirecting...");
-      setTimeout(() => {
-        router.push(`/reset-password?token=${result.token}`);
-      }, 1500);
+      toast.success("Password reset email sent! Please check your inbox.");
     } else {
       toast.error(result.error || "Failed to send reset link");
       setIsSubmitting(false);
@@ -50,7 +45,7 @@ export default function ForgotPasswordPage() {
   return (
     <AuthLayout
       title="Forgot password?"
-      subtitle="Enter your email and we'll send you a reset link."
+      subtitle="Enter your email and we'll send you a password reset link."
     >
       {sent ? (
         <div className="text-center space-y-4">
@@ -58,10 +53,12 @@ export default function ForgotPasswordPage() {
             <Mail size={28} className="text-blue-600" />
           </div>
           <p className="text-slate-600">
-            A password reset link has been generated for{" "}
+            A password reset email has been sent to{" "}
             <span className="font-medium text-slate-800">{email}</span>.
           </p>
-          <p className="text-sm text-slate-500">Redirecting you to reset your password...</p>
+          <p className="text-sm text-slate-500">
+            Please check your inbox (and spam folder) for the password reset instructions.
+          </p>
         </div>
       ) : (
         <form onSubmit={handleSubmit} className="space-y-5">
@@ -71,7 +68,7 @@ export default function ForgotPasswordPage() {
             value={email}
             onChange={setEmail}
             onBlur={handleBlur}
-            placeholder="admin@gymation.com"
+            placeholder="owner@example.com"
             icon={Mail}
             error={touched ? error : undefined}
             autoComplete="email"
