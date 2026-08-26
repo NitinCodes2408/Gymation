@@ -638,9 +638,12 @@ export default function Dashboard() {
                 <option value="">No Trainer</option>
                 {trainers.map(t => {
                   const isPT = t.trainerType === "Personal Trainer";
+                  const ptChargeDisplay = isPT 
+                    ? `${formatCurrency(t.ptCharges || 0)}/${(t.ptChargeType || "month").toLowerCase()}` 
+                    : "₹0";
                   return (
                     <option key={t.id} value={t.id}>
-                      {t.name} — {t.trainerType || "PT"} (PT: {formatCurrency(isPT ? (t.ptCharges || 0) : 0)})
+                      {t.name} — {t.trainerType || "Personal Trainer"} ({ptChargeDisplay})
                     </option>
                   );
                 })}

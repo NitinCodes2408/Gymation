@@ -248,6 +248,46 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Track active loaded owner email to prevent race conditions during switch
   const activeOwnerEmailRef = useRef<string | null>(null);
 
+  const createInitialOwnerData = (currentUser: User): OwnerGymData => {
+    const todayStr = new Date().toISOString().split("T")[0];
+    return {
+      members: [],
+      trainers: [],
+      plans: [],
+      payments: [],
+      expenses: [],
+      attendance: [],
+      notifications: [
+        {
+          id: `NOT-WELCOME-${Date.now()}`,
+          title: "Welcome to Gymation!",
+          message: `Your management console for "${currentUser.gymName}" is active with Indian Rupee (₹) currency.`,
+          date: todayStr,
+          read: false,
+          type: "success",
+        },
+      ],
+      activities: [
+        {
+          id: `ACT-INIT-${Date.now()}`,
+          type: "member_added",
+          description: `Account initialized for ${currentUser.gymName}`,
+          timestamp: "Just now",
+        },
+      ],
+      settings: {
+        gymName: currentUser.gymName || "My Gym",
+        email: currentUser.email,
+        phone: currentUser.phone || "+91 98765 00000",
+        address: "Plot 101, Main Gym Hall",
+        currency: "₹",
+        taxRate: 18.0,
+        enableNotifications: true,
+        theme: "light",
+      },
+    };
+  };
+
   // Load owner-specific data whenever user logs in or switches
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -309,46 +349,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     setIsInitialized(true);
   }, [user]);
-
-  function createInitialOwnerData(currentUser: User): OwnerGymData {
-    const todayStr = new Date().toISOString().split("T")[0];
-    return {
-      members: [],
-      trainers: [],
-      plans: [],
-      payments: [],
-      expenses: [],
-      attendance: [],
-      notifications: [
-        {
-          id: `NOT-WELCOME-${Date.now()}`,
-          title: "Welcome to Gymation!",
-          message: `Your management console for "${currentUser.gymName}" is active with Indian Rupee (₹) currency.`,
-          date: todayStr,
-          read: false,
-          type: "success",
-        },
-      ],
-      activities: [
-        {
-          id: `ACT-INIT-${Date.now()}`,
-          type: "member_added",
-          description: `Account initialized for ${currentUser.gymName}`,
-          timestamp: "Just now",
-        },
-      ],
-      settings: {
-        gymName: currentUser.gymName || "My Gym",
-        email: currentUser.email,
-        phone: currentUser.phone || "+91 98765 00000",
-        address: "Plot 101, Main Gym Hall",
-        currency: "₹",
-        taxRate: 18.0,
-        enableNotifications: true,
-        theme: "light",
-      },
-    };
-  }
 
   // Centralized Owner Data Persistence
   const syncToOwnerStorage = useCallback(() => {

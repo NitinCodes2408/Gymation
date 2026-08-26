@@ -525,9 +525,12 @@ export default function MembersPage() {
                 <option value="">No Trainer</option>
                 {trainers.map(t => {
                   const isPT = t.trainerType === "Personal Trainer";
+                  const ptChargeDisplay = isPT 
+                    ? `${formatCurrency(t.ptCharges || 0)}/${(t.ptChargeType || "month").toLowerCase()}` 
+                    : "₹0";
                   return (
                     <option key={t.id} value={t.id}>
-                      {t.name} — {t.trainerType || "Personal Trainer"} (PT: {formatCurrency(isPT ? (t.ptCharges || 0) : 0)})
+                      {t.name} — {t.trainerType || "Personal Trainer"} ({ptChargeDisplay})
                     </option>
                   );
                 })}
@@ -592,24 +595,13 @@ export default function MembersPage() {
               <input type="date" value={formData.dob} onChange={(e) => setFormData({ ...formData, dob: e.target.value })} className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 text-sm outline-none" />
             </div>
           </div>
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Plan</label>
               <select value={formData.planId} onChange={(e) => setFormData({ ...formData, planId: e.target.value })} className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 text-sm">
                 {plans.map(p => (
                   <option key={p.id} value={p.id}>
                     {p.name} — {p.durationMonths === 1 ? "1 Month" : p.durationMonths === 12 ? "1 Year" : `${p.durationMonths} Months`} — {formatCurrency(p.price)}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Trainer</label>
-              <select value={formData.trainerId} onChange={(e) => setFormData({ ...formData, trainerId: e.target.value })} className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 text-sm">
-                <option value="">None</option>
-                {trainers.map(t => (
-                  <option key={t.id} value={t.id}>
-                    {t.name} ({t.trainerType || "PT"}: {formatCurrency(t.ptCharges || 0)})
                   </option>
                 ))}
               </select>
@@ -622,6 +614,23 @@ export default function MembersPage() {
                 <option value="Pending">Pending</option>
               </select>
             </div>
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Trainer</label>
+            <select value={formData.trainerId} onChange={(e) => setFormData({ ...formData, trainerId: e.target.value })} className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 text-sm">
+              <option value="">No Trainer</option>
+              {trainers.map(t => {
+                const isPT = t.trainerType === "Personal Trainer";
+                const ptChargeDisplay = isPT 
+                  ? `${formatCurrency(t.ptCharges || 0)}/${(t.ptChargeType || "month").toLowerCase()}` 
+                  : "₹0";
+                return (
+                  <option key={t.id} value={t.id}>
+                    {t.name} — {t.trainerType || "Personal Trainer"} ({ptChargeDisplay})
+                  </option>
+                );
+              })}
+            </select>
           </div>
           <div className="space-y-1.5">
             <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Full Address</label>

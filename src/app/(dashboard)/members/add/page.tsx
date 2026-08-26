@@ -229,12 +229,15 @@ export default function AddMemberPage() {
                   onChange={(e) => setFormData({ ...formData, trainerId: e.target.value })}
                   className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 focus:ring-2 focus:ring-blue-500 outline-none transition-all text-sm"
                 >
-                  <option value="">No Trainer Assigned</option>
+                  <option value="">No Trainer</option>
                   {trainers.map((trainer) => {
                     const isPT = trainer.trainerType === "Personal Trainer";
+                    const ptChargeDisplay = isPT 
+                      ? `${formatCurrency(trainer.ptCharges || 0)}/${(trainer.ptChargeType || "month").toLowerCase()}` 
+                      : "₹0";
                     return (
                       <option key={trainer.id} value={trainer.id}>
-                        {trainer.name} — {trainer.trainerType || "Personal Trainer"} (PT Charges: {formatCurrency(isPT ? (trainer.ptCharges || 0) : 0)}/{trainer.ptChargeType || "month"})
+                        {trainer.name} — {trainer.trainerType || "Personal Trainer"} ({ptChargeDisplay})
                       </option>
                     );
                   })}
