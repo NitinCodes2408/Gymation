@@ -50,9 +50,12 @@ export default function Navbar({ setIsOpenMobile }: NavbarProps) {
   const unreadCount = notifications.filter((n) => !n.read).length;
 
   const handleLogout = async () => {
-    await logout();
-    toast.success("Logged out successfully.");
-    router.push("/login");
+    try {
+      await logout();
+    } finally {
+      toast.success("Logged out successfully.");
+      window.location.replace("/login");
+    }
   };
 
   return (

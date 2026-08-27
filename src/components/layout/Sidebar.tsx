@@ -50,9 +50,12 @@ export default function Sidebar({ isOpenMobile, setIsOpenMobile, isCollapsed, se
   const { logout } = useAuth();
 
   const handleLogout = async () => {
-    await logout();
-    toast.success("Logged out successfully.");
-    router.push("/login");
+    try {
+      await logout();
+    } finally {
+      toast.success("Logged out successfully.");
+      window.location.replace("/login");
+    }
   };
 
   const sidebarContent = (
