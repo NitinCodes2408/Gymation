@@ -4,7 +4,21 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useApp } from "@/lib/context/AppContext";
 import { useAuth } from "@/lib/context/AuthContext";
-import { Bell, Search, Moon, Sun, Menu, Settings, LogOut, CheckCheck, Trash2 } from "lucide-react";
+import {
+  Bell,
+  Search,
+  Moon,
+  Sun,
+  Menu,
+  Settings,
+  LogOut,
+  CheckCheck,
+  Trash2,
+  Building2,
+  ChevronDown,
+  Check,
+  PlusCircle,
+} from "lucide-react";
 import Link from "next/link";
 import { toast } from "sonner";
 
@@ -15,21 +29,25 @@ interface NavbarProps {
 export default function Navbar({ setIsOpenMobile }: NavbarProps) {
   const router = useRouter();
   const { logout, user } = useAuth();
-  const { 
-    theme, 
-    toggleTheme, 
-    notifications, 
-    markNotificationAsRead, 
-    markAllNotificationsAsRead, 
+  const {
+    theme,
+    toggleTheme,
+    notifications,
+    markNotificationAsRead,
+    markAllNotificationsAsRead,
     deleteNotification,
-    clearAllNotifications
+    clearAllNotifications,
+    gyms,
+    activeGym,
+    switchGym,
   } = useApp();
 
   const [searchQuery, setSearchQuery] = useState("");
   const [showNotifications, setShowNotifications] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
+  const [showGymSelector, setShowGymSelector] = useState(false);
 
-  const unreadCount = notifications.filter(n => !n.read).length;
+  const unreadCount = notifications.filter((n) => !n.read).length;
 
   const handleLogout = async () => {
     await logout();
@@ -41,15 +59,77 @@ export default function Navbar({ setIsOpenMobile }: NavbarProps) {
     <header className="h-16 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between px-6 sticky top-0 z-10 transition-colors">
       <div className="flex items-center gap-4 flex-1">
         {/* Mobile Toggle Menu */}
-        <button 
+        <button
           onClick={() => setIsOpenMobile(true)}
           className="lg:hidden p-2 text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl"
         >
           <Menu size={20} />
         </button>
 
+        {/* Multi-Gym Selector Dropdown */}
+        <div className="relative">
+          <button
+            onClick={() => {
+              setShowGymSelector(!showGymSelector);
+              setShowNotifications(false);
+              setShowProfile(false);
+            }}
+            className="flex items-center gap-2 px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-750 transition-colors text-xs sm:text-sm font-semibold text-slate-800 dark:text-slate-100"
+          >
+            <Building2 size={16} className="text-blue-600 dark:text-blue-400 shrink-0" />
+            <span className="max-w-[140px] sm:max-w-[200px] truncate">
+              {activeGym?.gymName || user?.gymName || "My Gym"}
+            </span>
+            {gyms.length > 1 && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 font-mono">
+                {gyms.length}
+              </span>
+            )}
+            <ChevronDown size={14} className="text-slate-400" />
+          </button>
+
+          {showGymSelector && (
+            <div className="absolute left-0 mt-2 w-64 bg-white dark:bg-slate-900 rounded-2xl shadow-xl border border-slate-100 dark:border-slate-800 z-50 py-2">
+              <div className="px-3 py-1.5 border-b border-slate-100 dark:border-slate-800 text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
+                My Gyms
+              </div>
+              <div className="max-h-48 overflow-y-auto divide-y divide-slate-50 dark:divide-slate-800/50">
+                {gyms.map((g) => {
+                  const isActive = g.id === activeGym?.id;
+                  return (
+                    <button
+                      key={g.id}
+                      onClick={() => {
+                        switchGym(g.id);
+                        setShowGymSelector(false);
+                      }}
+                      className={`w-full flex items-center justify-between px-3 py-2 text-left text-sm transition-colors hover:bg-slate-50 dark:hover:bg-slate-800 ${
+                        isActive
+                          ? "text-blue-600 dark:text-blue-400 font-semibold bg-blue-50/30 dark:bg-blue-900/10"
+                          : "text-slate-700 dark:text-slate-300"
+                      }`}
+                    >
+                      <span className="truncate pr-2">{g.gymName}</span>
+                      {isActive && <Check size={16} className="text-blue-600 shrink-0" />}
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="p-2 border-t border-slate-100 dark:border-slate-800">
+                <Link
+                  href="/settings"
+                  onClick={() => setShowGymSelector(false)}
+                  className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors w-full"
+                >
+                  <PlusCircle size={14} /> Add / Manage Gyms
+                </Link>
+              </div>
+            </div>
+          )}
+        </div>
+
         {/* Search Bar */}
-        <div className="relative w-full max-w-md hidden sm:block">
+        <div className="relative w-full max-w-md hidden md:block">
           <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
             <Search size={18} className="text-slate-400" />
           </div>
@@ -65,7 +145,7 @@ export default function Navbar({ setIsOpenMobile }: NavbarProps) {
 
       <div className="flex items-center gap-4">
         {/* Theme Toggle Button */}
-        <button 
+        <button
           onClick={toggleTheme}
           className="text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-100 p-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
           title="Toggle Theme"
@@ -75,10 +155,11 @@ export default function Navbar({ setIsOpenMobile }: NavbarProps) {
 
         {/* Notifications Dropdown */}
         <div className="relative">
-          <button 
+          <button
             onClick={() => {
               setShowNotifications(!showNotifications);
               setShowProfile(false);
+              setShowGymSelector(false);
             }}
             className="text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-100 p-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors relative"
           >
@@ -95,7 +176,7 @@ export default function Navbar({ setIsOpenMobile }: NavbarProps) {
               <div className="px-4 py-3 border-b border-slate-100 dark:border-slate-800 flex justify-between items-center bg-slate-50/50 dark:bg-slate-800/50">
                 <span className="font-semibold text-slate-800 dark:text-slate-200">Notifications</span>
                 {unreadCount > 0 && (
-                  <button 
+                  <button
                     onClick={markAllNotificationsAsRead}
                     className="text-xs text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1 font-medium"
                   >
@@ -111,20 +192,28 @@ export default function Navbar({ setIsOpenMobile }: NavbarProps) {
                   </div>
                 ) : (
                   notifications.map((notif) => (
-                    <div 
-                      key={notif.id} 
-                      className={`p-4 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors flex gap-3 relative ${!notif.read ? "bg-blue-50/20 dark:bg-blue-900/10" : ""}`}
+                    <div
+                      key={notif.id}
+                      className={`p-4 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors flex gap-3 relative ${
+                        !notif.read ? "bg-blue-50/20 dark:bg-blue-900/10" : ""
+                      }`}
                     >
                       <div className="flex-1">
                         <div className="flex justify-between items-start gap-2">
-                          <p className={`text-sm font-semibold ${!notif.read ? "text-slate-900 dark:text-white" : "text-slate-700 dark:text-slate-300"}`}>
+                          <p
+                            className={`text-sm font-semibold ${
+                              !notif.read
+                                ? "text-slate-900 dark:text-white"
+                                : "text-slate-700 dark:text-slate-300"
+                            }`}
+                          >
                             {notif.title}
                           </p>
                           <span className="text-[10px] text-slate-400 whitespace-nowrap">{notif.date}</span>
                         </div>
                         <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">{notif.message}</p>
                         {!notif.read && (
-                          <button 
+                          <button
                             onClick={() => markNotificationAsRead(notif.id)}
                             className="text-[10px] text-blue-600 dark:text-blue-400 font-medium hover:underline mt-2 block"
                           >
@@ -132,7 +221,7 @@ export default function Navbar({ setIsOpenMobile }: NavbarProps) {
                           </button>
                         )}
                       </div>
-                      <button 
+                      <button
                         onClick={() => deleteNotification(notif.id)}
                         className="text-slate-400 hover:text-red-500 p-1"
                         title="Delete notification"
@@ -146,7 +235,7 @@ export default function Navbar({ setIsOpenMobile }: NavbarProps) {
 
               {notifications.length > 0 && (
                 <div className="p-2 border-t border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/50 text-center">
-                  <button 
+                  <button
                     onClick={clearAllNotifications}
                     className="text-xs text-red-500 hover:text-red-700 font-semibold hover:underline"
                   >
@@ -162,10 +251,11 @@ export default function Navbar({ setIsOpenMobile }: NavbarProps) {
 
         {/* Profile Dropdown */}
         <div className="relative">
-          <button 
+          <button
             onClick={() => {
               setShowProfile(!showProfile);
               setShowNotifications(false);
+              setShowGymSelector(false);
             }}
             className="flex items-center gap-3 cursor-pointer group"
           >
@@ -174,7 +264,7 @@ export default function Navbar({ setIsOpenMobile }: NavbarProps) {
                 {user?.name ?? "Admin User"}
               </div>
               <div className="text-xs text-slate-500 dark:text-slate-400">
-                {user?.gymName ?? user?.role ?? "Gym Owner"}
+                {activeGym?.gymName || user?.gymName || "Gym Owner"}
               </div>
             </div>
             <img
@@ -186,14 +276,14 @@ export default function Navbar({ setIsOpenMobile }: NavbarProps) {
 
           {showProfile && (
             <div className="absolute right-0 mt-2 w-48 bg-white dark:bg-slate-900 rounded-2xl shadow-xl border border-slate-100 dark:border-slate-800 z-50 py-1">
-              <Link 
-                href="/settings" 
+              <Link
+                href="/settings"
                 onClick={() => setShowProfile(false)}
                 className="flex items-center gap-2.5 px-4 py-2.5 text-sm text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors"
               >
                 <Settings size={16} /> Settings
               </Link>
-              <button 
+              <button
                 onClick={() => {
                   setShowProfile(false);
                   handleLogout();

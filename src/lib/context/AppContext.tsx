@@ -4,6 +4,12 @@ import React, { createContext, useContext, useState, useEffect, useCallback, use
 import { toast } from "sonner";
 import { formatCurrency, formatIndianNumber } from "@/lib/utils";
 import { useAuth } from "@/lib/context/AuthContext";
+import {
+  getOwnerGyms,
+  createGym,
+  updateGym,
+  type Gym,
+} from "@/lib/firebase/gymService";
 import type { User } from "@/lib/auth/types";
 
 // --- TYPES & INTERFACES ---
@@ -65,7 +71,7 @@ export interface Payment {
   planName: string;
   membershipAmount?: number;
   ptAmount?: number;
-  amount: number; // Total amount = membershipAmount + ptAmount
+  amount: number;
   date: string;
   method: "Cash" | "Card" | "UPI" | "Bank Transfer" | "Cheque";
   status: "Paid" | "Pending" | "Partial" | "Overdue" | "Failed";
@@ -132,7 +138,8 @@ export interface GymSettings {
   theme: "light" | "dark";
 }
 
-export interface OwnerGymData {
+export interface GymDataPartition {
+  gymId: string;
   members: Member[];
   trainers: Trainer[];
   plans: MembershipPlan[];
@@ -145,7 +152,15 @@ export interface OwnerGymData {
 }
 
 interface AppContextType {
-  // State
+  // Multi-Gym State
+  gyms: Gym[];
+  activeGym: Gym | null;
+  activeGymId: string;
+  switchGym: (gymId: string) => void;
+  addNewGym: (gymData: { gymName: string; phone?: string; email?: string; address?: string }) => Promise<{ success: boolean; error?: string }>;
+  updateActiveGym: (gymData: Partial<Gym>) => Promise<{ success: boolean; error?: string }>;
+
+  // Operational Data for Active Gym
   members: Member[];
   trainers: Trainer[];
   plans: MembershipPlan[];
@@ -158,10 +173,10 @@ interface AppContextType {
   theme: "light" | "dark";
   isInitialized: boolean;
 
-  // Centralized Owner Data Management Layer
+  // Centralized Owner Data Management
   getCurrentUser: () => User | null;
-  getCurrentOwnerData: () => OwnerGymData | null;
-  saveOwnerData: (data: Partial<OwnerGymData>) => void;
+  getCurrentOwnerData: () => GymDataPartition | null;
+  saveOwnerData: (data: Partial<GymDataPartition>) => void;
   getOwnerMembers: () => Member[];
   getOwnerTrainers: () => Trainer[];
   getOwnerPayments: () => Payment[];
@@ -214,10 +229,9 @@ interface AppContextType {
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
-// Helper to construct isolated LocalStorage key per gym owner email
-export const getOwnerStorageKey = (email: string): string => {
-  const sanitized = email.trim().toLowerCase().replace(/[^a-z0-9_]/g, "_");
-  return `gym_owner_data_${sanitized}`;
+// Storage partition key per gymId and ownerId
+export const getGymStorageKey = (ownerId: string, gymId: string): string => {
+  return `gym_data_${ownerId}_${gymId}`;
 };
 
 const defaultSettings: GymSettings = {
@@ -234,6 +248,12 @@ const defaultSettings: GymSettings = {
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user } = useAuth();
   const [isInitialized, setIsInitialized] = useState(false);
+
+  // Multi-Gym State
+  const [gyms, setGyms] = useState<Gym[]>([]);
+  const [activeGymId, setActiveGymId] = useState<string>("");
+
+  // Operational State for active gym
   const [members, setMembers] = useState<Member[]>([]);
   const [trainers, setTrainers] = useState<Trainer[]>([]);
   const [plans, setPlans] = useState<MembershipPlan[]>([]);
@@ -245,12 +265,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [settings, setSettings] = useState<GymSettings>(defaultSettings);
   const [theme, setTheme] = useState<"light" | "dark">("light");
 
-  // Track active loaded owner email to prevent race conditions during switch
-  const activeOwnerEmailRef = useRef<string | null>(null);
+  // Track active loaded partition to prevent race conditions during gym switch
+  const activePartitionRef = useRef<{ ownerId: string; gymId: string } | null>(null);
 
-  const createInitialOwnerData = (currentUser: User): OwnerGymData => {
+  const createInitialGymData = (gym: Gym, ownerUser: User): GymDataPartition => {
     const todayStr = new Date().toISOString().split("T")[0];
     return {
+      gymId: gym.id,
       members: [],
       trainers: [],
       plans: [],
@@ -260,8 +281,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       notifications: [
         {
           id: `NOT-WELCOME-${Date.now()}`,
-          title: "Welcome to Gymation!",
-          message: `Your management console for "${currentUser.gymName}" is active with Indian Rupee (₹) currency.`,
+          title: `Welcome to ${gym.gymName}!`,
+          message: `Your management console for "${gym.gymName}" is active with Indian Rupee (₹) currency.`,
           date: todayStr,
           read: false,
           type: "success",
@@ -271,29 +292,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         {
           id: `ACT-INIT-${Date.now()}`,
           type: "member_added",
-          description: `Account initialized for ${currentUser.gymName}`,
+          description: `Account initialized for ${gym.gymName}`,
           timestamp: "Just now",
         },
       ],
       settings: {
-        gymName: currentUser.gymName || "My Gym",
-        email: currentUser.email,
-        phone: currentUser.phone || "+91 98765 00000",
-        address: "Plot 101, Main Gym Hall",
-        currency: "₹",
-        taxRate: 18.0,
+        gymName: gym.gymName || ownerUser.gymName || "My Gym",
+        email: gym.email || ownerUser.email,
+        phone: gym.phone || ownerUser.phone || "+91 98765 00000",
+        address: gym.address || "Plot 101, Main Gym Hall",
+        currency: gym.currency || "₹",
+        taxRate: gym.taxRate !== undefined ? gym.taxRate : 18.0,
         enableNotifications: true,
         theme: "light",
       },
     };
   };
 
-  // Load owner-specific data whenever user logs in or switches
+  // Load owner's gyms whenever user logs in or switches account
   useEffect(() => {
     if (typeof window === "undefined") return;
 
     if (!user) {
-      // User logged out: clear memory state
+      // User logged out: clean memory state
+      setGyms([]);
+      setActiveGymId("");
       setMembers([]);
       setTrainers([]);
       setPlans([]);
@@ -303,60 +326,109 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setNotifications([]);
       setActivities([]);
       setSettings(defaultSettings);
-      activeOwnerEmailRef.current = null;
+      activePartitionRef.current = null;
       setIsInitialized(false);
       return;
     }
 
-    const ownerKey = getOwnerStorageKey(user.email);
-    activeOwnerEmailRef.current = user.email;
+    let isMounted = true;
 
-    const storedDataRaw = localStorage.getItem(ownerKey);
-    let ownerData: OwnerGymData;
+    async function loadOwnerGyms() {
+      if (!user) return;
+      let ownerGyms = await getOwnerGyms(user.id);
+
+      // If owner has no gyms registered yet, auto-create their initial gym
+      if (ownerGyms.length === 0) {
+        const createResult = await createGym(user.id, {
+          gymName: user.gymName || "My Gym",
+          email: user.email,
+          phone: user.phone,
+        });
+        if (createResult.gym) {
+          ownerGyms = [createResult.gym];
+        }
+      }
+
+      if (!isMounted) return;
+      setGyms(ownerGyms);
+
+      // Determine active gym ID
+      const savedActiveGymId = localStorage.getItem(`gymation_active_gym_${user.id}`);
+      const validActiveGym = ownerGyms.find((g) => g.id === savedActiveGymId) || ownerGyms[0];
+      const initialGymId = validActiveGym ? validActiveGym.id : "";
+
+      setActiveGymId(initialGymId);
+    }
+
+    loadOwnerGyms();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [user]);
+
+  // Load active gym operational data whenever activeGymId or user changes
+  useEffect(() => {
+    if (typeof window === "undefined" || !user || !activeGymId) return;
+
+    const currentGym = gyms.find((g) => g.id === activeGymId);
+    if (!currentGym) return;
+
+    const storageKey = getGymStorageKey(user.id, activeGymId);
+    activePartitionRef.current = { ownerId: user.id, gymId: activeGymId };
+
+    const storedDataRaw = localStorage.getItem(storageKey);
+    let gymData: GymDataPartition;
 
     if (storedDataRaw) {
       try {
-        ownerData = JSON.parse(storedDataRaw);
+        gymData = JSON.parse(storedDataRaw);
       } catch {
-        ownerData = createInitialOwnerData(user);
+        gymData = createInitialGymData(currentGym, user);
       }
     } else {
-      // First time login for this owner: create isolated partition
-      ownerData = createInitialOwnerData(user);
-      localStorage.setItem(ownerKey, JSON.stringify(ownerData));
+      gymData = createInitialGymData(currentGym, user);
+      localStorage.setItem(storageKey, JSON.stringify(gymData));
     }
 
-    // Apply owner data to state
-    setMembers(ownerData.members || []);
-    setTrainers(ownerData.trainers || []);
-    setPlans(ownerData.plans || []);
-    setPayments(ownerData.payments || []);
-    setExpenses(ownerData.expenses || []);
-    setAttendance(ownerData.attendance || []);
-    setNotifications(ownerData.notifications || []);
-    setActivities(ownerData.activities || []);
-    
-    const ownerSettings = {
+    // Apply data partition to active state
+    setMembers(gymData.members || []);
+    setTrainers(gymData.trainers || []);
+    setPlans(gymData.plans || []);
+    setPayments(gymData.payments || []);
+    setExpenses(gymData.expenses || []);
+    setAttendance(gymData.attendance || []);
+    setNotifications(gymData.notifications || []);
+    setActivities(gymData.activities || []);
+
+    const gymSettings = {
       ...defaultSettings,
-      ...(ownerData.settings || {}),
-      gymName: ownerData.settings?.gymName || user.gymName || "My Gym",
-      email: user.email,
-      phone: ownerData.settings?.phone || user.phone || "+91 98765 00000",
-      currency: "₹",
+      ...(gymData.settings || {}),
+      gymName: currentGym.gymName || gymData.settings?.gymName || "My Gym",
+      email: currentGym.email || gymData.settings?.email || user.email,
+      phone: currentGym.phone || gymData.settings?.phone || user.phone || "+91 98765 00000",
+      currency: currentGym.currency || gymData.settings?.currency || "₹",
     };
-    setSettings(ownerSettings);
-    setTheme(ownerSettings.theme || "light");
+    setSettings(gymSettings);
+    setTheme(gymSettings.theme || "light");
 
     setIsInitialized(true);
-  }, [user]);
+  }, [user, activeGymId, gyms]);
 
-  // Centralized Owner Data Persistence
-  const syncToOwnerStorage = useCallback(() => {
-    if (typeof window === "undefined" || !user || !isInitialized) return;
-    if (activeOwnerEmailRef.current !== user.email) return;
+  // Persist active gym operational state to storage
+  const syncToGymStorage = useCallback(() => {
+    if (typeof window === "undefined" || !user || !activeGymId || !isInitialized) return;
+    if (
+      !activePartitionRef.current ||
+      activePartitionRef.current.ownerId !== user.id ||
+      activePartitionRef.current.gymId !== activeGymId
+    ) {
+      return;
+    }
 
-    const ownerKey = getOwnerStorageKey(user.email);
-    const ownerData: OwnerGymData = {
+    const storageKey = getGymStorageKey(user.id, activeGymId);
+    const gymData: GymDataPartition = {
+      gymId: activeGymId,
       members,
       trainers,
       plans,
@@ -367,20 +439,120 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       activities,
       settings,
     };
-    localStorage.setItem(ownerKey, JSON.stringify(ownerData));
-  }, [user, isInitialized, members, trainers, plans, payments, expenses, attendance, notifications, activities, settings]);
+    localStorage.setItem(storageKey, JSON.stringify(gymData));
+  }, [
+    user,
+    activeGymId,
+    isInitialized,
+    members,
+    trainers,
+    plans,
+    payments,
+    expenses,
+    attendance,
+    notifications,
+    activities,
+    settings,
+  ]);
 
-  // Synchronize state changes to owner storage
+  // Synchronize state changes to active gym storage
   useEffect(() => {
-    syncToOwnerStorage();
-  }, [syncToOwnerStorage]);
+    syncToGymStorage();
+  }, [syncToGymStorage]);
+
+  // Switch Active Gym
+  const switchGym = useCallback(
+    (newGymId: string) => {
+      if (!user || newGymId === activeGymId) return;
+      const targetGym = gyms.find((g) => g.id === newGymId);
+      if (!targetGym) return;
+
+      // Save current state before switching
+      syncToGymStorage();
+
+      setActiveGymId(newGymId);
+      if (typeof window !== "undefined") {
+        localStorage.setItem(`gymation_active_gym_${user.id}`, newGymId);
+      }
+      toast.success(`Switched to "${targetGym.gymName}"`);
+    },
+    [user, activeGymId, gyms, syncToGymStorage]
+  );
+
+  // Add an additional gym under the authenticated owner
+  const addNewGym = useCallback(
+    async (gymData: {
+      gymName: string;
+      phone?: string;
+      email?: string;
+      address?: string;
+    }): Promise<{ success: boolean; error?: string }> => {
+      if (!user) {
+        return { success: false, error: "Authentication required." };
+      }
+
+      const result = await createGym(user.id, {
+        ...gymData,
+        email: gymData.email || user.email,
+        phone: gymData.phone || user.phone,
+      });
+
+      if (!result.success || !result.gym) {
+        return { success: false, error: result.error || "Failed to create gym." };
+      }
+
+      // Add to owner's gyms
+      const updatedGyms = [...gyms, result.gym];
+      setGyms(updatedGyms);
+
+      // Switch to the newly created gym
+      setActiveGymId(result.gym.id);
+      if (typeof window !== "undefined") {
+        localStorage.setItem(`gymation_active_gym_${user.id}`, result.gym.id);
+      }
+
+      toast.success(`Gym "${result.gym.gymName}" created successfully!`);
+      return { success: true };
+    },
+    [user, gyms]
+  );
+
+  // Update details of active gym
+  const updateActiveGym = useCallback(
+    async (gymData: Partial<Gym>): Promise<{ success: boolean; error?: string }> => {
+      if (!user || !activeGymId) {
+        return { success: false, error: "No active gym selected." };
+      }
+
+      const result = await updateGym(activeGymId, user.id, gymData);
+      if (!result.success) {
+        return { success: false, error: result.error || "Failed to update gym." };
+      }
+
+      // Update state
+      setGyms((prev) =>
+        prev.map((g) => (g.id === activeGymId ? { ...g, ...gymData } : g))
+      );
+
+      if (gymData.gymName) {
+        setSettings((prev) => ({ ...prev, gymName: gymData.gymName! }));
+      }
+
+      toast.success("Gym details updated successfully!");
+      return { success: true };
+    },
+    [user, activeGymId]
+  );
+
+  const activeGym = gyms.find((g) => g.id === activeGymId) || null;
 
   // Centralized Owner Data Layer methods
   const getCurrentUser = useCallback(() => user, [user]);
 
-  const getCurrentOwnerData = useCallback((): OwnerGymData | null => {
-    if (!user) return null;
+  const getCurrentOwnerData = useCallback((): GymDataPartition | null => {
+    if (!user || !activeGymId) return null;
     return {
+      gymId: activeGymId,
       members,
       trainers,
       plans,
@@ -391,20 +563,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       activities,
       settings,
     };
-  }, [user, members, trainers, plans, payments, expenses, attendance, notifications, activities, settings]);
+  }, [user, activeGymId, members, trainers, plans, payments, expenses, attendance, notifications, activities, settings]);
 
-  const saveOwnerData = useCallback((partial: Partial<OwnerGymData>) => {
-    if (!user) return;
-    if (partial.members !== undefined) setMembers(partial.members);
-    if (partial.trainers !== undefined) setTrainers(partial.trainers);
-    if (partial.plans !== undefined) setPlans(partial.plans);
-    if (partial.payments !== undefined) setPayments(partial.payments);
-    if (partial.expenses !== undefined) setExpenses(partial.expenses);
-    if (partial.attendance !== undefined) setAttendance(partial.attendance);
-    if (partial.notifications !== undefined) setNotifications(partial.notifications);
-    if (partial.activities !== undefined) setActivities(partial.activities);
-    if (partial.settings !== undefined) setSettings((prev) => ({ ...prev, ...partial.settings }));
-  }, [user]);
+  const saveOwnerData = useCallback(
+    (partial: Partial<GymDataPartition>) => {
+      if (!user) return;
+      if (partial.members !== undefined) setMembers(partial.members);
+      if (partial.trainers !== undefined) setTrainers(partial.trainers);
+      if (partial.plans !== undefined) setPlans(partial.plans);
+      if (partial.payments !== undefined) setPayments(partial.payments);
+      if (partial.expenses !== undefined) setExpenses(partial.expenses);
+      if (partial.attendance !== undefined) setAttendance(partial.attendance);
+      if (partial.notifications !== undefined) setNotifications(partial.notifications);
+      if (partial.activities !== undefined) setActivities(partial.activities);
+      if (partial.settings !== undefined) setSettings((prev) => ({ ...prev, ...partial.settings }));
+    },
+    [user]
+  );
 
   const getOwnerMembers = useCallback(() => members, [members]);
   const getOwnerTrainers = useCallback(() => trainers, [trainers]);
@@ -413,7 +588,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const getOwnerExpenses = useCallback(() => expenses, [expenses]);
   const getOwnerMembershipPlans = useCallback(() => plans, [plans]);
 
-  // Expiry notification cron check for the active owner's members
+  // Expiry notification cron check for the active gym's members
   useEffect(() => {
     if (!isInitialized || !user || members.length === 0) return;
 
@@ -517,7 +692,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     toast.success("Notifications cleared.");
   };
 
-  // Members API — saves exclusively to currently logged-in owner
+  // Members API — saves exclusively to active gym
   const addMember = (memberData: Omit<Member, "id">) => {
     const newId = `M-${Math.floor(1000 + Math.random() * 9000)}`;
     const newMember: Member = {
@@ -570,7 +745,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     toast.success(`Member deleted and records archived.`);
   };
 
-  // Trainers API — saves exclusively to currently logged-in owner
+  // Trainers API — saves exclusively to active gym
   const addTrainer = (trainerData: Omit<Trainer, "id">) => {
     const newId = `T-${Math.floor(2000 + Math.random() * 9000)}`;
     const newTrainer: Trainer = {
@@ -608,7 +783,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     toast.success("Trainer removed successfully.");
   };
 
-  // Plans API — saves exclusively to currently logged-in owner
+  // Plans API — saves exclusively to active gym
   const addPlan = (planData: Omit<MembershipPlan, "id">) => {
     const newId = `P-${Math.floor(3000 + Math.random() * 9000)}`;
     const newPlan: MembershipPlan = {
@@ -648,7 +823,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     toast.success("Membership plan deleted.");
   };
 
-  // Payments API — saves exclusively to currently logged-in owner
+  // Payments API — saves exclusively to active gym
   const addPayment = (paymentData: Omit<Payment, "id">) => {
     const newId = `PAY-${Math.floor(4000 + Math.random() * 9000)}`;
     const membershipAmount = Math.max(0, paymentData.membershipAmount !== undefined ? paymentData.membershipAmount : paymentData.amount);
@@ -687,7 +862,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     toast.success("Payment updated successfully!");
   };
 
-  // Expenses API — saves exclusively to currently logged-in owner
+  // Expenses API — saves exclusively to active gym
   const addExpense = (expenseData: Omit<Expense, "id">) => {
     const newId = `EXP-${Math.floor(8000 + Math.random() * 9000)}`;
     const newExpense: Expense = {
@@ -721,7 +896,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     toast.success(`Expense "${expenseTitle}" removed.`);
   };
 
-  // Attendance API — saves exclusively to currently logged-in owner
+  // Attendance API — saves exclusively to active gym
   const markAttendance = (memberId: string, status: "Present" | "Absent", date?: string) => {
     const recordDate = date || new Date().toISOString().split("T")[0];
     const member = members.find((m) => m.id === memberId);
@@ -764,6 +939,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   return (
     <AppContext.Provider
       value={{
+        gyms,
+        activeGym,
+        activeGymId,
+        switchGym,
+        addNewGym,
+        updateActiveGym,
         members,
         trainers,
         plans,
