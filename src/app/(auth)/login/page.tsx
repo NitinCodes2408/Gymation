@@ -49,7 +49,7 @@ export default function LoginPage() {
 
     if (result.success) {
       toast.success("Welcome back to Gymation!");
-      router.push("/");
+      router.push("/dashboard");
     } else {
       toast.error(result.error || "Invalid email or password.");
       setIsSubmitting(false);

@@ -10,7 +10,7 @@ export default function GuestGuard({ children }: { children: React.ReactNode }) 
 
   useEffect(() => {
     if (!isLoading && isAuthenticated) {
-      router.replace("/");
+      router.replace("/dashboard");
     }
   }, [isLoading, isAuthenticated, router]);
 

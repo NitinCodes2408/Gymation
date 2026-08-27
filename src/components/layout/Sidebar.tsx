@@ -25,7 +25,7 @@ import { toast } from "sonner";
 import { useAuth } from "@/lib/context/AuthContext";
 
 const navigation = [
-  { name: "Dashboard", href: "/", icon: LayoutDashboard },
+  { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
   { name: "Members", href: "/members", icon: Users },
   { name: "Member Reports", href: "/member-reports", icon: FileText },
   { name: "Trainers", href: "/trainers", icon: UserCheck },
@@ -90,7 +90,7 @@ export default function Sidebar({ isOpenMobile, setIsOpenMobile, isCollapsed, se
       {/* Navigation Items */}
       <div className="flex-1 overflow-y-auto py-6 px-4 space-y-1">
         {navigation.map((item) => {
-          const isActive = pathname === item.href || (item.href !== "/" && pathname.startsWith(item.href));
+          const isActive = pathname === item.href || (item.href !== "/dashboard" && pathname.startsWith(item.href));
           
           return (
             <Link 
