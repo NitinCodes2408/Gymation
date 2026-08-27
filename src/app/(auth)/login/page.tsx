@@ -56,15 +56,9 @@ export default function LoginPage() {
     }
   };
 
-  const setDemoCredentials = (demoEmail: string, demoPass: string) => {
-    setEmail(demoEmail);
-    setPassword(demoPass);
-    setErrors({});
-  };
-
   return (
-    <AuthLayout title="Gym Owner Sign In" subtitle="Enter your credentials to access your gym's isolated data.">
-      <form onSubmit={handleLogin} className="space-y-5">
+    <AuthLayout title="Gym Owner Sign In" subtitle="Enter your registered email and password to access your dashboard.">
+      <form onSubmit={handleLogin} className="space-y-5" autoComplete="off">
         <AuthInput
           label="Email Address"
           type="email"
@@ -74,7 +68,7 @@ export default function LoginPage() {
           placeholder="owner@example.com"
           icon={Mail}
           error={touched.email ? errors.email : undefined}
-          autoComplete="email"
+          autoComplete="off"
         />
 
         <AuthInput
@@ -87,7 +81,7 @@ export default function LoginPage() {
           icon={Lock}
           showToggle
           error={touched.password ? errors.password : undefined}
-          autoComplete="current-password"
+          autoComplete="new-password"
         />
 
         <div className="flex items-center justify-between text-sm pb-2">
@@ -98,7 +92,7 @@ export default function LoginPage() {
               onChange={(e) => setRememberMe(e.target.checked)}
               className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 w-4 h-4 cursor-pointer"
             />
-            <span className="text-slate-600 font-medium">Remember me</span>
+            <span className="text-slate-600 dark:text-slate-400 font-medium">Remember me</span>
           </label>
           <Link href="/forgot-password" className="text-blue-600 hover:text-blue-700 font-medium hover:underline">
             Forgot password?
@@ -119,31 +113,11 @@ export default function LoginPage() {
 
       <div className="mt-8 text-center text-sm text-slate-500 space-y-3">
         <p>
-          Don&apos;t have an owner account?{" "}
+          Don&apos;t have an owner account or want to register a gym?{" "}
           <Link href="/signup" className="text-blue-600 hover:text-blue-700 font-medium hover:underline">
             Register your gym
           </Link>
         </p>
-
-        <div className="p-3 bg-slate-50 dark:bg-slate-850 rounded-xl border border-slate-200 dark:border-slate-800 text-xs text-left space-y-1.5">
-          <p className="font-semibold text-slate-700 dark:text-slate-300">Quick Test Accounts:</p>
-          <div className="flex flex-wrap gap-2 pt-1">
-            <button
-              type="button"
-              onClick={() => setDemoCredentials("ownerA@test.com", "password123")}
-              className="px-2 py-1 rounded bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 hover:bg-blue-100 dark:hover:bg-blue-900/50 transition-colors font-mono text-[11px]"
-            >
-              Owner A (Paradise Fitness)
-            </button>
-            <button
-              type="button"
-              onClick={() => setDemoCredentials("ownerB@test.com", "password123")}
-              className="px-2 py-1 rounded bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 transition-colors font-mono text-[11px]"
-            >
-              Owner B (Fitness Hub)
-            </button>
-          </div>
-        </div>
       </div>
     </AuthLayout>
   );

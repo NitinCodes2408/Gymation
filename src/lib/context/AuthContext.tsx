@@ -31,13 +31,19 @@ import {
   validateLoginPassword,
 } from "@/lib/auth/validation";
 
+interface RegisterResult {
+  success: boolean;
+  error?: string;
+  isNewGymForExistingOwner?: boolean;
+}
+
 interface AuthContextType {
   user: User | null;
   firebaseUser: FirebaseUser | null;
   isAuthenticated: boolean;
   isLoading: boolean;
   login: (email: string, password: string, rememberMe?: boolean) => Promise<{ success: boolean; error?: string }>;
-  register: (data: { name: string; gymName: string; email: string; phone: string; password: string }) => Promise<{ success: boolean; error?: string }>;
+  register: (data: { name: string; gymName: string; email: string; phone: string; password: string }) => Promise<RegisterResult>;
   logout: () => Promise<void>;
   requestPasswordReset: (email: string) => Promise<{ success: boolean; error?: string }>;
   resetPassword: (token: string, newPassword: string) => Promise<{ success: boolean; error?: string }>;
@@ -84,9 +90,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       auth,
       async (fbUser) => {
         if (fbUser) {
-          const gymUser = await buildGymUser(fbUser);
-          setFirebaseUser(fbUser);
-          setUser(gymUser);
+          try {
+            const gymUser = await buildGymUser(fbUser);
+            setFirebaseUser(fbUser);
+            setUser(gymUser);
+          } catch (err) {
+            console.error("Error building gym user from auth:", err);
+            setFirebaseUser(fbUser);
+            setUser({
+              id: fbUser.uid,
+              email: fbUser.email || "",
+              name: fbUser.displayName || "Gym Owner",
+              gymName: "Gymation Fitness",
+              phone: fbUser.phoneNumber || "",
+              role: "Gym Owner",
+            });
+          }
         } else {
           setFirebaseUser(null);
           setUser(null);
@@ -142,7 +161,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       email: string;
       phone: string;
       password: string;
-    }): Promise<{ success: boolean; error?: string }> => {
+    }): Promise<RegisterResult> => {
       const nameErr = validateName(data.name);
       if (nameErr) return { success: false, error: nameErr };
 
@@ -165,7 +184,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         };
       }
 
-      // Check gym name uniqueness before creating account
+      // Check gym name uniqueness across all gyms first
       const isAvailable = await checkGymNameAvailable(data.gymName);
       if (!isAvailable) {
         return {
@@ -174,6 +193,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         };
       }
 
+      // Try creating new user account
       try {
         const userCredential = await createUserWithEmailAndPassword(
           auth,
@@ -183,7 +203,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
         const uid = userCredential.user.uid;
 
-        // Update display name in Firebase Auth
+        // Set display name in Firebase Auth
         if (data.name.trim()) {
           try {
             await updateProfile(userCredential.user, {
@@ -194,27 +214,80 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           }
         }
 
-        // Create owner profile document in /owners/{ownerUID}
+        // Create owner profile document in /owners/{uid}
         await createOwnerProfile(uid, {
           name: data.name.trim(),
           email: data.email.trim(),
           phone: data.phone.trim(),
         });
 
-        // Create initial gym in /gyms/{gymId} linked to owner UID
+        // Create first gym in /gyms/{gymId} linked to owner UID
         await createGym(uid, {
           gymName: data.gymName.trim(),
           email: data.email.trim(),
           phone: data.phone.trim(),
         });
 
-        // Explicitly sign out so newly registered user must manually log in
+        // Explicitly sign out so registration does not auto-login
         await signOut(auth);
         setUser(null);
         setFirebaseUser(null);
 
-        return { success: true };
+        return { success: true, isNewGymForExistingOwner: false };
       } catch (err: unknown) {
+        const errorCode = (err as { code?: string })?.code;
+
+        // If email already belongs to an existing Firebase Auth account:
+        // Attempt to authenticate the existing owner securely to add the new gym under their existing UID
+        if (errorCode === "auth/email-already-in-use") {
+          try {
+            const signInCred = await signInWithEmailAndPassword(
+              auth,
+              data.email.trim(),
+              data.password
+            );
+
+            const existingUid = signInCred.user.uid;
+
+            // Create the new gym under the existing owner's UID
+            const gymResult = await createGym(existingUid, {
+              gymName: data.gymName.trim(),
+              email: data.email.trim(),
+              phone: data.phone.trim(),
+            });
+
+            if (!gymResult.success) {
+              await signOut(auth);
+              setUser(null);
+              setFirebaseUser(null);
+              return { success: false, error: gymResult.error || "Failed to create gym." };
+            }
+
+            // Explicitly sign out
+            await signOut(auth);
+            setUser(null);
+            setFirebaseUser(null);
+
+            return { success: true, isNewGymForExistingOwner: true };
+          } catch (authErr: unknown) {
+            const authCode = (authErr as { code?: string })?.code;
+            if (
+              authCode === "auth/wrong-password" ||
+              authCode === "auth/invalid-credential"
+            ) {
+              return {
+                success: false,
+                error:
+                  "This email is already registered. Please enter your correct account password to add this new gym, or sign in directly.",
+              };
+            }
+            return {
+              success: false,
+              error: getFirebaseAuthErrorMessage(authErr),
+            };
+          }
+        }
+
         const errorMessage = getFirebaseAuthErrorMessage(err);
         return { success: false, error: errorMessage };
       }

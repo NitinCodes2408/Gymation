@@ -76,7 +76,11 @@ export default function SignUpPage() {
     const result = await register({ name, gymName, email, phone, password });
 
     if (result.success) {
-      toast.success("Account created successfully. Please login to continue.");
+      if (result.isNewGymForExistingOwner) {
+        toast.success("New gym branch registered to your account! Please login to continue.");
+      } else {
+        toast.success("Account created successfully. Please login to continue.");
+      }
       router.push("/login");
     } else {
       toast.error(result.error || "Registration failed");
@@ -86,7 +90,7 @@ export default function SignUpPage() {
 
   return (
     <AuthLayout title="Register Gym Owner" subtitle="Create your dedicated gym management console.">
-      <form onSubmit={handleSubmit} className="space-y-4">
+      <form onSubmit={handleSubmit} className="space-y-4" autoComplete="off">
         <AuthInput
           label="Owner Name *"
           type="text"
@@ -96,7 +100,7 @@ export default function SignUpPage() {
           placeholder="e.g. Rajesh Sharma"
           icon={User}
           error={touched.name ? errors.name : undefined}
-          autoComplete="name"
+          autoComplete="off"
         />
 
         <AuthInput
@@ -108,7 +112,7 @@ export default function SignUpPage() {
           placeholder="e.g. Paradise Fitness"
           icon={Building2}
           error={touched.gymName ? errors.gymName : undefined}
-          autoComplete="organization"
+          autoComplete="off"
         />
 
         <AuthInput
@@ -120,7 +124,7 @@ export default function SignUpPage() {
           placeholder="owner@example.com"
           icon={Mail}
           error={touched.email ? errors.email : undefined}
-          autoComplete="email"
+          autoComplete="off"
         />
 
         <AuthInput
@@ -132,7 +136,7 @@ export default function SignUpPage() {
           placeholder="+91 98765 43210"
           icon={Phone}
           error={touched.phone ? errors.phone : undefined}
-          autoComplete="tel"
+          autoComplete="off"
         />
 
         <div className="space-y-2">
@@ -169,7 +173,7 @@ export default function SignUpPage() {
             <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
           ) : (
             <>
-              Create Gym Owner Account
+              Register Gym & Owner
               <ArrowRight size={18} className="ml-2 group-hover:translate-x-1 transition-transform" />
             </>
           )}
