@@ -6,15 +6,30 @@ import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/Table";
 import { Badge } from "@/components/ui/Badge";
-import { Search, Plus, Download, Filter, Eye, Edit, Trash2, Users, CreditCard } from "lucide-react";
+import { Search, Plus, Download, Filter, Eye, Edit, Trash2, Users, CreditCard, Fingerprint, RefreshCw, Unlink, Link2, CheckCircle2, AlertCircle, ShieldAlert } from "lucide-react";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Modal } from "@/components/ui/Modal";
 import { formatCurrency, formatIndianNumber } from "@/lib/utils";
 import { toast } from "sonner";
 import Link from "next/link";
+import { BiometricDeviceUser } from "@/lib/biometric/types";
+import { FingerprintEnrollModal } from "@/components/biometric/FingerprintEnrollModal";
 
 export default function MembersPage() {
-  const { members, deleteMember, updateMember, addMember, addPayment, plans, trainers, settings, attendance } = useApp();
+  const { 
+    members, 
+    deleteMember, 
+    updateMember, 
+    addMember, 
+    addPayment, 
+    plans, 
+    trainers, 
+    settings, 
+    attendance,
+    assignBiometricUser,
+    unmapBiometricUser,
+    validateBiometricUserId,
+  } = useApp();
   
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
@@ -29,6 +44,16 @@ export default function MembersPage() {
   const [editMember, setEditMember] = useState<Member | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [isAddOpen, setIsAddOpen] = useState(false);
+  const [isAddEnrollModalOpen, setIsAddEnrollModalOpen] = useState(false);
+
+  // Biometric Mapping Hub state
+  const [isBioHubOpen, setIsBioHubOpen] = useState(false);
+  const [bioUsers, setBioUsers] = useState<BiometricDeviceUser[]>([]);
+  const [isLoadingBioUsers, setIsLoadingBioUsers] = useState(false);
+  const [bioFetchError, setBioFetchError] = useState<string | null>(null);
+  const [selectedMemberForBioUser, setSelectedMemberForBioUser] = useState<Record<string, string>>({});
+  const [unmapConfirmMember, setUnmapConfirmMember] = useState<Member | null>(null);
+  const [reassignConfirm, setReassignConfirm] = useState<{ bioUserId: string; oldMember: Member; newMember: Member } | null>(null);
 
   // Form states
   const [formData, setFormData] = useState({
@@ -42,7 +67,8 @@ export default function MembersPage() {
     planId: "",
     trainerId: "",
     status: "Active" as Member["status"],
-    notes: ""
+    notes: "",
+    biometricUserId: ""
   });
 
   const selectedPlan = plans.find((p) => p.id === formData.planId) || (formData.planId ? undefined : plans[0]);
@@ -65,7 +91,8 @@ export default function MembersPage() {
       planId: plans[0]?.id || "",
       trainerId: "",
       status: "Active",
-      notes: ""
+      notes: "",
+      biometricUserId: ""
     });
     setIsAddOpen(true);
   };
@@ -83,12 +110,82 @@ export default function MembersPage() {
       planId: member.planId,
       trainerId: member.trainerId,
       status: member.status,
-      notes: member.notes || ""
+      notes: member.notes || "",
+      biometricUserId: member.biometricUserId || ""
     });
+  };
+
+  const fetchBiometricUsers = async () => {
+    setIsLoadingBioUsers(true);
+    setBioFetchError(null);
+    try {
+      const res = await fetch("/api/biometric/users");
+      const data = await res.json();
+      if (data.success && Array.isArray(data.users)) {
+        setBioUsers(data.users);
+      } else {
+        setBioFetchError(data.error || "Could not retrieve device users from K20.");
+      }
+    } catch (err: any) {
+      setBioFetchError(err.message || "Failed to communicate with biometric API.");
+    } finally {
+      setIsLoadingBioUsers(false);
+    }
+  };
+
+  const handleOpenBiometricHub = () => {
+    setIsBioHubOpen(true);
+    fetchBiometricUsers();
+  };
+
+  const handleAssignFromHub = (bioUserId: string) => {
+    const targetMemberId = selectedMemberForBioUser[bioUserId];
+    if (!targetMemberId) {
+      toast.error("Please select a gym member to assign.");
+      return;
+    }
+
+    const targetMember = members.find((m) => m.id === targetMemberId);
+    if (!targetMember) {
+      toast.error("Selected member not found.");
+      return;
+    }
+
+    const currentMappedMember = members.find((m) => m.biometricUserId === bioUserId);
+    if (currentMappedMember && currentMappedMember.id !== targetMemberId) {
+      // Prompt confirmation before changing mapping
+      setReassignConfirm({
+        bioUserId,
+        oldMember: currentMappedMember,
+        newMember: targetMember,
+      });
+      return;
+    }
+
+    assignBiometricUser(targetMemberId, bioUserId);
   };
 
   const handleAddSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+
+    if (!formData.name.trim()) {
+      toast.error("Please enter the member's full name.");
+      return;
+    }
+
+    if (!formData.mobile.trim()) {
+      toast.error("Please enter the member's mobile number.");
+      return;
+    }
+
+    // MANDATORY FINGERPRINT ENROLLMENT REQUIREMENT
+    const cleanBioId = formData.biometricUserId?.trim();
+    if (!cleanBioId) {
+      toast.error("Fingerprint enrollment is required to create this member.");
+      setIsAddEnrollModalOpen(true);
+      return;
+    }
+
     if (plans.length === 0) {
       toast.error("Please create at least one membership plan before registering a member.");
       return;
@@ -98,9 +195,7 @@ export default function MembersPage() {
     const expiry = new Date();
     expiry.setMonth(expiry.getMonth() + duration);
 
-    const newMemberId = `M-${Math.floor(1000 + Math.random() * 9000)}`;
-
-    addMember({
+    const res = addMember({
       name: formData.name,
       mobile: formData.mobile,
       email: formData.email,
@@ -114,12 +209,17 @@ export default function MembersPage() {
       expiryDate: expiry.toISOString().split("T")[0],
       status: formData.status,
       photo: "https://images.unsplash.com/photo-1534438327276-14e5300c3a48?w=256&h=256&q=80",
-      notes: formData.notes
+      notes: formData.notes,
+      biometricUserId: cleanBioId
     });
 
-    if (plan) {
+    if (!res.success) {
+      return;
+    }
+
+    if (plan && res.memberId) {
       addPayment({
-        memberId: newMemberId,
+        memberId: res.memberId,
         memberName: formData.name,
         planId: plan.id,
         planName: plan.name,
@@ -142,6 +242,7 @@ export default function MembersPage() {
       updateMember(editMember.id, {
         ...formData,
         dob: formData.dob ? formData.dob.trim() : "",
+        biometricUserId: formData.biometricUserId?.trim() || undefined
       });
       setEditMember(null);
     }
@@ -168,7 +269,8 @@ export default function MembersPage() {
     .filter((m) => {
       const matchesSearch = m.name.toLowerCase().includes(search.toLowerCase()) || 
                             m.id.toLowerCase().includes(search.toLowerCase()) || 
-                            m.mobile.includes(search);
+                            m.mobile.includes(search) ||
+                            (m.biometricUserId && m.biometricUserId.includes(search));
       const matchesStatus = statusFilter === "all" || m.status === statusFilter;
       const matchesPlan = planFilter === "all" || m.planId === planFilter;
       return matchesSearch && matchesStatus && matchesPlan;
@@ -198,8 +300,8 @@ export default function MembersPage() {
       toast.error("No data to export");
       return;
     }
-    const headers = "ID,Name,Mobile,Email,Gender,Status,Join Date,Expiry Date\n";
-    const rows = members.map(m => `"${m.id}","${m.name}","${m.mobile}","${m.email}","${m.gender}","${m.status}","${m.joinDate}","${m.expiryDate}"`).join("\n");
+    const headers = "ID,Name,Biometric ID,Mobile,Email,Gender,Status,Join Date,Expiry Date\n";
+    const rows = members.map(m => `"${m.id}","${m.name}","${m.biometricUserId || ""}","${m.mobile}","${m.email}","${m.gender}","${m.status}","${m.joinDate}","${m.expiryDate}"`).join("\n");
     const blob = new Blob([headers + rows], { type: "text/csv" });
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -217,6 +319,14 @@ export default function MembersPage() {
           <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">Register, modify, and monitor gym members.</p>
         </div>
         <div className="flex items-center gap-3">
+          <Button 
+            variant="outline" 
+            className="gap-2 border-purple-200 text-purple-700 bg-purple-50 hover:bg-purple-100 dark:border-purple-800 dark:bg-purple-950/40 dark:text-purple-300 dark:hover:bg-purple-900/50 shadow-sm"
+            onClick={handleOpenBiometricHub}
+          >
+            <Fingerprint size={16} />
+            Biometric Mapping
+          </Button>
           <Button variant="outline" className="gap-2 border-slate-200 dark:border-slate-800 dark:text-slate-300" onClick={handleExportCSV}>
             <Download size={16} />
             Export CSV
@@ -286,6 +396,7 @@ export default function MembersPage() {
                 <TableRow className="dark:border-slate-800">
                   <TableHead className="cursor-pointer select-none" onClick={() => toggleSort("name")}>Member {sortField === "name" && (sortOrder === "asc" ? "▲" : "▼")}</TableHead>
                   <TableHead>Contact</TableHead>
+                  <TableHead>Biometric ID</TableHead>
                   <TableHead>Plan</TableHead>
                   <TableHead className="cursor-pointer select-none" onClick={() => toggleSort("joinDate")}>Join Date {sortField === "joinDate" && (sortOrder === "asc" ? "▲" : "▼")}</TableHead>
                   <TableHead className="cursor-pointer select-none" onClick={() => toggleSort("expiryDate")}>Expiry Date {sortField === "expiryDate" && (sortOrder === "asc" ? "▲" : "▼")}</TableHead>
@@ -308,6 +419,18 @@ export default function MembersPage() {
                         </div>
                       </TableCell>
                       <TableCell className="text-slate-600 dark:text-slate-400 text-sm">{member.mobile}</TableCell>
+                      <TableCell>
+                        {member.biometricUserId ? (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-purple-50 text-purple-700 dark:bg-purple-950/40 dark:text-purple-300 border border-purple-200 dark:border-purple-800/60">
+                            <Fingerprint size={12} className="text-purple-600 dark:text-purple-400" />
+                            ID #{member.biometricUserId}
+                          </span>
+                        ) : (
+                          <span className="text-xs text-slate-400 dark:text-slate-500 font-mono">
+                            —
+                          </span>
+                        )}
+                      </TableCell>
                       <TableCell>
                         <span className="font-medium text-slate-700 dark:text-slate-300">{currentPlan?.name || "No Plan"}</span>
                       </TableCell>
@@ -404,6 +527,17 @@ export default function MembersPage() {
                 <div>
                   <p className="text-xs font-bold text-slate-400 uppercase tracking-wide">Email Address</p>
                   <p className="text-slate-800 dark:text-slate-200 mt-0.5">{viewMember.email || "N/A"}</p>
+                </div>
+                <div>
+                  <p className="text-xs font-bold text-slate-400 uppercase tracking-wide">Biometric Terminal</p>
+                  <p className="text-slate-800 dark:text-slate-200 mt-0.5 font-medium flex items-center gap-1.5">
+                    <Fingerprint size={14} className={viewMember.biometricUserId ? "text-purple-600" : "text-slate-400"} />
+                    {viewMember.biometricUserId ? (
+                      <span className="font-mono text-purple-700 dark:text-purple-300 font-semibold">User ID #{viewMember.biometricUserId} (Mapped)</span>
+                    ) : (
+                      <span className="text-slate-400">Not Mapped</span>
+                    )}
+                  </p>
                 </div>
                 <div>
                   <p className="text-xs font-bold text-slate-400 uppercase tracking-wide">Date of Birth</p>
@@ -504,6 +638,63 @@ export default function MembersPage() {
               <input type="date" value={formData.dob} onChange={(e) => setFormData({ ...formData, dob: e.target.value })} className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 text-sm" />
             </div>
           </div>
+          
+          {/* Mandatory Biometric Fingerprint Enrollment Card in Modal */}
+          <div className="space-y-3 p-3.5 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200 dark:border-slate-700">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <Fingerprint size={16} className="text-purple-600 dark:text-purple-400" />
+                <span className="text-xs font-bold text-slate-800 dark:text-slate-100">
+                  Fingerprint Enrollment
+                </span>
+                <span className="text-[10px] uppercase font-bold px-1.5 py-0.5 rounded bg-red-100 text-red-700 dark:bg-red-950/60 dark:text-red-300">
+                  REQUIRED
+                </span>
+              </div>
+
+              {formData.biometricUserId ? (
+                <Badge variant="success" className="text-[11px] gap-1 py-0.5 px-2">
+                  <CheckCircle2 size={11} /> ID #{formData.biometricUserId}
+                </Badge>
+              ) : (
+                <Badge variant="warning" className="text-[11px] gap-1 py-0.5 px-2">
+                  <AlertCircle size={11} /> Not Enrolled
+                </Badge>
+              )}
+            </div>
+
+            {formData.biometricUserId ? (
+              <div className="flex items-center justify-between text-xs p-2 bg-purple-50 dark:bg-purple-950/40 rounded-lg border border-purple-200 dark:border-purple-800">
+                <span className="font-mono font-bold text-purple-800 dark:text-purple-200">
+                  K20 Hardware User #{formData.biometricUserId} (Verified)
+                </span>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setIsAddEnrollModalOpen(true)}
+                  className="h-6 text-[11px] px-2 border-purple-300 text-purple-700"
+                >
+                  Change
+                </Button>
+              </div>
+            ) : (
+              <div className="flex items-center justify-between gap-2 pt-0.5">
+                <span className="text-[11px] text-amber-700 dark:text-amber-300">
+                  Enroll on K20 to unlock saving.
+                </span>
+                <Button
+                  type="button"
+                  onClick={() => setIsAddEnrollModalOpen(true)}
+                  className="bg-purple-600 hover:bg-purple-700 text-white text-xs h-7 px-2.5 gap-1"
+                >
+                  <Fingerprint size={13} />
+                  Enroll on K20
+                </Button>
+              </div>
+            )}
+          </div>
+
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Plan Subscription *</label>
@@ -595,6 +786,24 @@ export default function MembersPage() {
               <input type="date" value={formData.dob} onChange={(e) => setFormData({ ...formData, dob: e.target.value })} className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 text-sm outline-none" />
             </div>
           </div>
+
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium text-slate-700 dark:text-slate-300 flex items-center justify-between">
+              <span className="flex items-center gap-1.5">
+                <Fingerprint size={14} className="text-purple-600" />
+                Biometric Terminal User ID
+              </span>
+              <span className="text-xs text-slate-400">Leave blank to unmap</span>
+            </label>
+            <input 
+              type="text" 
+              value={formData.biometricUserId} 
+              onChange={(e) => setFormData({ ...formData, biometricUserId: e.target.value })} 
+              className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 text-sm outline-none font-mono" 
+              placeholder="e.g. 19" 
+            />
+          </div>
+
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Plan</label>
@@ -651,6 +860,251 @@ export default function MembersPage() {
         </form>
       </Modal>
 
+      {/* Biometric Mapping Hub Modal */}
+      <Modal 
+        isOpen={isBioHubOpen} 
+        onClose={() => setIsBioHubOpen(false)} 
+        title="Biometric Device Mapping Hub"
+        description="Map physical eSSL / Identix K20 biometric User IDs to GymTrack gym members."
+        className="max-w-3xl"
+      >
+        <div className="space-y-6">
+          {/* Hardware & Network Status Bar */}
+          <div className="p-3.5 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200 dark:border-slate-700 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs">
+            <div className="flex items-center gap-2">
+              <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
+              <div>
+                <span className="font-semibold text-slate-800 dark:text-slate-200">eSSL / Identix K20 Terminal</span>
+                <span className="text-slate-500 font-mono ml-2">(192.168.1.200:4370)</span>
+              </div>
+            </div>
+            <div className="flex items-center gap-3 w-full sm:w-auto justify-between sm:justify-end">
+              <span className="text-slate-500">
+                Enrolled on Device: <strong className="text-slate-800 dark:text-slate-200">{bioUsers.length}</strong>
+              </span>
+              <Button 
+                variant="outline" 
+                size="sm" 
+                onClick={fetchBiometricUsers} 
+                disabled={isLoadingBioUsers}
+                className="gap-1.5 h-8 text-xs dark:border-slate-700"
+              >
+                <RefreshCw size={12} className={isLoadingBioUsers ? "animate-spin" : ""} />
+                {isLoadingBioUsers ? "Scanning..." : "Refresh"}
+              </Button>
+            </div>
+          </div>
+
+          {bioFetchError && (
+            <div className="p-3 bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900/50 rounded-xl flex items-center gap-3 text-xs text-red-700 dark:text-red-300">
+              <AlertCircle size={16} className="shrink-0" />
+              <div>
+                <p className="font-semibold">Device Communication Notice</p>
+                <p>{bioFetchError}</p>
+              </div>
+            </div>
+          )}
+
+          {/* Enrolled Device Users Table */}
+          <div className="border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden shadow-sm">
+            <div className="max-h-[380px] overflow-y-auto">
+              <Table>
+                <TableHeader className="bg-slate-50 dark:bg-slate-800/80 sticky top-0 z-10">
+                  <TableRow className="dark:border-slate-800">
+                    <TableHead className="w-32">K20 User ID</TableHead>
+                    <TableHead>Terminal Name</TableHead>
+                    <TableHead>Mapping Status</TableHead>
+                    <TableHead>GymTrack Member</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {isLoadingBioUsers && bioUsers.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={5} className="text-center py-8 text-slate-500 text-xs">
+                        <RefreshCw size={18} className="animate-spin inline mr-2 text-purple-600" />
+                        Reading enrolled users from K20 terminal...
+                      </TableCell>
+                    </TableRow>
+                  ) : bioUsers.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={5} className="text-center py-8 text-slate-500 text-xs">
+                        No enrolled biometric users retrieved. Click "Refresh" to scan.
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    bioUsers.map((u) => {
+                      const mappedMember = members.find((m) => m.biometricUserId === u.userId);
+                      const isMapped = !!mappedMember;
+
+                      return (
+                        <TableRow key={u.userId} className="dark:border-slate-800 text-xs">
+                          <TableCell className="font-mono font-bold text-purple-700 dark:text-purple-300">
+                            <span className="flex items-center gap-1.5">
+                              <Fingerprint size={14} className="text-purple-600 dark:text-purple-400 shrink-0" />
+                              User #{u.userId}
+                            </span>
+                          </TableCell>
+                          <TableCell className="text-slate-600 dark:text-slate-300 font-medium">
+                            {u.name || `User ${u.userId}`}
+                          </TableCell>
+                          <TableCell>
+                            {isMapped ? (
+                              <Badge variant="success" className="gap-1">
+                                <CheckCircle2 size={11} /> Mapped
+                              </Badge>
+                            ) : (
+                              <Badge variant="warning">
+                                Unmapped
+                              </Badge>
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            {isMapped ? (
+                              <div className="flex items-center gap-2">
+                                <span className="font-semibold text-slate-800 dark:text-slate-200">{mappedMember.name}</span>
+                                <span className="text-[11px] text-slate-400 font-mono">({mappedMember.id})</span>
+                              </div>
+                            ) : (
+                              <select
+                                value={selectedMemberForBioUser[u.userId] || ""}
+                                onChange={(e) =>
+                                  setSelectedMemberForBioUser((prev) => ({
+                                    ...prev,
+                                    [u.userId]: e.target.value,
+                                  }))
+                                }
+                                className="w-full max-w-[200px] px-2.5 py-1.5 border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 text-xs outline-none"
+                              >
+                                <option value="">Select gym member...</option>
+                                {members.map((m) => (
+                                  <option key={m.id} value={m.id}>
+                                    {m.name} ({m.id}) {m.biometricUserId ? `[#${m.biometricUserId}]` : ""}
+                                  </option>
+                                ))}
+                              </select>
+                            )}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            {isMapped ? (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => setUnmapConfirmMember(mappedMember)}
+                                className="h-7 text-xs border-red-200 text-red-600 hover:bg-red-50 dark:border-red-900/60 dark:hover:bg-red-950/40 gap-1"
+                              >
+                                <Unlink size={12} />
+                                Unmap
+                              </Button>
+                            ) : (
+                              <Button
+                                size="sm"
+                                onClick={() => handleAssignFromHub(u.userId)}
+                                disabled={!selectedMemberForBioUser[u.userId]}
+                                className="h-7 text-xs bg-purple-600 hover:bg-purple-700 text-white gap-1 disabled:opacity-40"
+                              >
+                                <Link2 size={12} />
+                                Assign
+                              </Button>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })
+                  )}
+                </TableBody>
+              </Table>
+            </div>
+          </div>
+
+          <div className="p-3 bg-purple-50/60 dark:bg-purple-950/20 rounded-xl border border-purple-100 dark:border-purple-900/40 text-[11px] text-purple-700 dark:text-purple-300">
+            <strong>Safe Mapping Guarantee:</strong> Unmapping or reassigning only modifies GymTrack software records. It will <em>never</em> delete user profiles or fingerprint templates stored in the physical K20 terminal hardware.
+          </div>
+
+          <div className="flex justify-end pt-1">
+            <Button onClick={() => setIsBioHubOpen(false)}>Done</Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Confirm Unmap Biometric Modal */}
+      <Modal 
+        isOpen={unmapConfirmMember !== null} 
+        onClose={() => setUnmapConfirmMember(null)} 
+        title="Unlink Biometric Mapping"
+      >
+        {unmapConfirmMember && (
+          <div className="space-y-4">
+            <div className="flex items-start gap-3 p-3 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/50 rounded-xl text-xs text-amber-800 dark:text-amber-200">
+              <ShieldAlert size={18} className="shrink-0 text-amber-600 dark:text-amber-400 mt-0.5" />
+              <div>
+                <p className="font-semibold">Confirm Software Dissociation</p>
+                <p className="mt-0.5">
+                  Are you sure you want to remove the link between <strong>{unmapConfirmMember.name}</strong> ({unmapConfirmMember.id}) and K20 Biometric User ID <strong>#{unmapConfirmMember.biometricUserId}</strong>?
+                </p>
+                <p className="mt-2 text-slate-500 dark:text-slate-400">
+                  Note: The fingerprint and User ID on the physical K20 device will remain completely intact.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-3 pt-2">
+              <Button variant="ghost" onClick={() => setUnmapConfirmMember(null)}>
+                Cancel
+              </Button>
+              <Button 
+                variant="danger" 
+                onClick={() => {
+                  unmapBiometricUser(unmapConfirmMember.id);
+                  setUnmapConfirmMember(null);
+                }}
+              >
+                Unlink Mapping
+              </Button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* Confirm Reassign Biometric Modal */}
+      <Modal 
+        isOpen={reassignConfirm !== null} 
+        onClose={() => setReassignConfirm(null)} 
+        title="Reassign Biometric User ID"
+      >
+        {reassignConfirm && (
+          <div className="space-y-4">
+            <div className="flex items-start gap-3 p-3 bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900/50 rounded-xl text-xs text-blue-800 dark:text-blue-200">
+              <AlertCircle size={18} className="shrink-0 text-blue-600 dark:text-blue-400 mt-0.5" />
+              <div>
+                <p className="font-semibold">Reassign User ID #{reassignConfirm.bioUserId}</p>
+                <p className="mt-0.5">
+                  Biometric User ID <strong>#{reassignConfirm.bioUserId}</strong> is currently assigned to <strong>{reassignConfirm.oldMember.name}</strong> ({reassignConfirm.oldMember.id}).
+                </p>
+                <p className="mt-1">
+                  Do you want to move this mapping to <strong>{reassignConfirm.newMember.name}</strong> ({reassignConfirm.newMember.id})?
+                </p>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-3 pt-2">
+              <Button variant="ghost" onClick={() => setReassignConfirm(null)}>
+                Cancel
+              </Button>
+              <Button 
+                className="bg-blue-600 hover:bg-blue-700 text-white"
+                onClick={() => {
+                  assignBiometricUser(reassignConfirm.newMember.id, reassignConfirm.bioUserId);
+                  setReassignConfirm(null);
+                }}
+              >
+                Confirm Reassignment
+              </Button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
       {/* Delete Member Confirmation Modal */}
       <Modal isOpen={deleteId !== null} onClose={() => setDeleteId(null)} title="Remove Gym Member">
         <div className="space-y-4">
@@ -663,6 +1117,16 @@ export default function MembersPage() {
           </div>
         </div>
       </Modal>
+
+      {/* Quick Add Member Fingerprint Enrollment Modal */}
+      <FingerprintEnrollModal
+        isOpen={isAddEnrollModalOpen}
+        onClose={() => setIsAddEnrollModalOpen(false)}
+        memberName={formData.name}
+        onSuccess={(enrolledUserId) => {
+          setFormData((prev) => ({ ...prev, biometricUserId: enrolledUserId }));
+        }}
+      />
     </div>
   );
 }

@@ -1,0 +1,28 @@
+{
+  "name": "gymtrack-biometric-bridge",
+  "version": "1.0.0",
+  "description": "Local LAN Biometric Bridge for eSSL/Identix K20 and GymTrack AI",
+  "main": "src/bridge.js",
+  "scripts": {
+    "test-device": "node src/protocolDiagnostic.js",
+    "test-protocol": "node src/protocolDiagnostic.js",
+    "test-tcp": "node src/diagnostic.js",
+    "dry-run": "node src/attendanceDryRun.js",
+    "sync-live": "node src/attendanceLiveSync.js",
+    "sync-test": "node src/attendanceSyncTest.js",
+    "sync": "node src/attendanceDaemon.js",
+    "start": "node src/bridge.js"
+  },
+  "keywords": [
+    "biometric",
+    "essl",
+    "zkteco",
+    "k20",
+    "gymtrack"
+  ],
+  "author": "GymTrack AI Team",
+  "license": "ISC",
+  "dependencies": {
+    "node-zklib": "^1.3.0"
+  }
+}

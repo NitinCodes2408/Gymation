@@ -8,7 +8,10 @@ import {
   getOwnerGyms,
   createGym,
   updateGym,
+  subscribeToGymAttendance,
+  recordBiometricAttendanceInFirestore,
   type Gym,
+  type FirestoreAttendanceDoc,
 } from "@/lib/firebase/gymService";
 import type { User } from "@/lib/auth/types";
 
@@ -37,6 +40,7 @@ export interface Member {
   status: "Active" | "Expired" | "Pending";
   photo: string;
   notes?: string;
+  biometricUserId?: string; // eSSL K20 hardware User ID (e.g. "19", "6")
   previousPlans?: MemberPreviousPlan[];
 }
 
@@ -109,6 +113,11 @@ export interface Attendance {
   date: string;
   status: "Present" | "Absent";
   checkInTime?: string;
+  source?: "manual" | "biometric";
+  deviceId?: string;
+  biometricUserId?: string;
+  transactionId?: string;
+  verificationType?: string;
 }
 
 export interface NotificationItem {
@@ -190,9 +199,15 @@ interface AppContextType {
   formatIndianNumber: (num: number | string | undefined | null) => string;
 
   // Members API
-  addMember: (member: Omit<Member, "id">) => void;
+  addMember: (member: Omit<Member, "id">) => { success: boolean; error?: string; memberId?: string };
   updateMember: (id: string, member: Partial<Member>) => void;
   deleteMember: (id: string) => void;
+
+  // Biometric Mapping API (Gym-Scoped)
+  assignBiometricUser: (memberId: string, biometricUserId: string) => { success: boolean; error?: string };
+  unmapBiometricUser: (memberId: string) => { success: boolean; error?: string };
+  validateBiometricUserId: (biometricUserId: string, excludeMemberId?: string) => { valid: boolean; error?: string; existingMember?: Member };
+  getMemberByBiometricId: (biometricUserId: string) => Member | undefined;
 
   // Trainers API
   addTrainer: (trainer: Omit<Trainer, "id">) => void;
@@ -215,6 +230,9 @@ interface AppContextType {
 
   // Attendance API
   markAttendance: (memberId: string, status: "Present" | "Absent", date?: string) => void;
+  recordBiometricAttendance: (record: Omit<Attendance, "id"> & { transactionId: string }) => { success: boolean; isDuplicate?: boolean; attendanceRecord?: Attendance; error?: string };
+  markBiometricAttendance: (memberId: string, date?: string, checkInTime?: string) => { success: boolean; attendanceRecord?: Attendance; error?: string };
+  recordBulkBiometricAttendance: (records: Array<Omit<Attendance, "id"> & { transactionId?: string }>) => { addedCount: number; duplicateCount: number };
 
   // Notifications API
   addNotification: (title: string, message: string, type?: NotificationItem["type"]) => void;
@@ -460,6 +478,64 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     syncToGymStorage();
   }, [syncToGymStorage]);
 
+  // Real-time Firestore Attendance Listener (Scoped to authenticated owner's active gym)
+  useEffect(() => {
+    if (!user || !activeGymId) return;
+
+    const unsubscribe = subscribeToGymAttendance(activeGymId, (firestoreRecords) => {
+      if (!firestoreRecords || firestoreRecords.length === 0) return;
+
+      setAttendance((prevAttendance) => {
+        let hasChanges = false;
+        const updatedList = [...prevAttendance];
+
+        firestoreRecords.forEach((fRec) => {
+          const txId = fRec.transactionId || (fRec.id?.startsWith("ATT-") ? fRec.id.substring(4) : fRec.id);
+          const attId = fRec.id?.startsWith("ATT-") ? fRec.id : `ATT-${txId}`;
+
+          const existingIndex = updatedList.findIndex(
+            (a) => (a.transactionId && a.transactionId === txId) || a.id === attId
+          );
+
+          const formattedRecord: Attendance = {
+            id: attId,
+            memberId: fRec.memberId,
+            memberName: fRec.memberName,
+            date: fRec.date,
+            status: fRec.status || "Present",
+            checkInTime: fRec.checkInTime,
+            source: fRec.source || "biometric",
+            deviceId: fRec.deviceId,
+            biometricUserId: fRec.biometricUserId,
+            transactionId: txId,
+          };
+
+          if (existingIndex >= 0) {
+            const existing = updatedList[existingIndex];
+            if (
+              existing.status !== formattedRecord.status ||
+              existing.checkInTime !== formattedRecord.checkInTime ||
+              existing.source !== formattedRecord.source ||
+              existing.date !== formattedRecord.date
+            ) {
+              updatedList[existingIndex] = { ...existing, ...formattedRecord };
+              hasChanges = true;
+            }
+          } else {
+            updatedList.unshift(formattedRecord);
+            hasChanges = true;
+          }
+        });
+
+        return hasChanges ? updatedList : prevAttendance;
+      });
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, [user, activeGymId]);
+
   // Switch Active Gym
   const switchGym = useCallback(
     (newGymId: string) => {
@@ -692,21 +768,145 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     toast.success("Notifications cleared.");
   };
 
+  // Biometric Mapping Validations & Operations (Gym-Scoped)
+  const validateBiometricUserId = useCallback(
+    (biometricUserId: string, excludeMemberId?: string): { valid: boolean; error?: string; existingMember?: Member } => {
+      const cleanId = biometricUserId.trim();
+      if (!cleanId) return { valid: true };
+
+      const existing = members.find(
+        (m) => m.biometricUserId === cleanId && (!excludeMemberId || m.id !== excludeMemberId)
+      );
+
+      if (existing) {
+        return {
+          valid: false,
+          error: `Biometric User ID "${cleanId}" is already assigned to ${existing.name} (${existing.id}).`,
+          existingMember: existing,
+        };
+      }
+
+      return { valid: true };
+    },
+    [members]
+  );
+
+  const getMemberByBiometricId = useCallback(
+    (biometricUserId: string): Member | undefined => {
+      const cleanId = biometricUserId.trim();
+      if (!cleanId) return undefined;
+      return members.find((m) => m.biometricUserId === cleanId);
+    },
+    [members]
+  );
+
+  const unmapBiometricUser = useCallback(
+    (memberId: string): { success: boolean; error?: string } => {
+      const targetMember = members.find((m) => m.id === memberId);
+      if (!targetMember) {
+        toast.error("Member not found.");
+        return { success: false, error: "Member not found." };
+      }
+
+      const oldBioId = targetMember.biometricUserId;
+      if (!oldBioId) {
+        return { success: true };
+      }
+
+      setMembers((prev) =>
+        prev.map((m) => (m.id === memberId ? { ...m, biometricUserId: undefined } : m))
+      );
+
+      addActivity("member_updated", `Removed biometric User ID #${oldBioId} mapping from ${targetMember.name}`);
+      toast.success(`Biometric mapping removed from ${targetMember.name}`);
+      return { success: true };
+    },
+    [members]
+  );
+
+  const assignBiometricUser = useCallback(
+    (memberId: string, biometricUserId: string): { success: boolean; error?: string } => {
+      const cleanBioId = biometricUserId.trim();
+      if (!cleanBioId) {
+        return unmapBiometricUser(memberId);
+      }
+
+      const check = validateBiometricUserId(cleanBioId, memberId);
+      if (!check.valid) {
+        toast.error(check.error || "Biometric User ID is already mapped to another member.");
+        return { success: false, error: check.error };
+      }
+
+      const targetMember = members.find((m) => m.id === memberId);
+      if (!targetMember) {
+        toast.error("Member not found.");
+        return { success: false, error: "Member not found." };
+      }
+
+      const oldBioId = targetMember.biometricUserId;
+      setMembers((prev) =>
+        prev.map((m) => {
+          if (m.id === memberId) {
+            return { ...m, biometricUserId: cleanBioId };
+          }
+          if (m.biometricUserId === cleanBioId) {
+            return { ...m, biometricUserId: undefined };
+          }
+          return m;
+        })
+      );
+
+      const actionDesc = oldBioId
+        ? `Updated biometric mapping for ${targetMember.name}: User #${oldBioId} → #${cleanBioId}`
+        : `Assigned biometric User ID #${cleanBioId} to ${targetMember.name}`;
+      
+      addActivity("member_updated", actionDesc);
+      toast.success(`Biometric User #${cleanBioId} assigned to ${targetMember.name}`);
+      return { success: true };
+    },
+    [members, validateBiometricUserId, unmapBiometricUser]
+  );
+
   // Members API — saves exclusively to active gym
-  const addMember = (memberData: Omit<Member, "id">) => {
+  const addMember = (memberData: Omit<Member, "id">): { success: boolean; error?: string; memberId?: string } => {
+    const cleanBioId = memberData.biometricUserId?.trim();
+
+    // Mandatory K20 fingerprint enrollment check
+    if (!cleanBioId) {
+      const errorMsg = "Fingerprint enrollment is required to create this member.";
+      toast.error(errorMsg);
+      return { success: false, error: errorMsg };
+    }
+
+    const check = validateBiometricUserId(cleanBioId);
+    if (!check.valid) {
+      toast.error(check.error || "Biometric User ID is already assigned.");
+      return { success: false, error: check.error };
+    }
+
     const newId = `M-${Math.floor(1000 + Math.random() * 9000)}`;
     const newMember: Member = {
       ...memberData,
       dob: memberData.dob ? memberData.dob.trim() : "",
+      biometricUserId: cleanBioId,
       id: newId,
     };
     setMembers((prev) => [...prev, newMember]);
-    addActivity("member_added", `Registered new gym member: ${newMember.name}`);
-    addNotification("New Member Registered", `${newMember.name} joined with ${newMember.status} status.`, "success");
-    toast.success(`Member ${newMember.name} added successfully!`);
+    addActivity("member_added", `Registered new gym member: ${newMember.name} (Biometric K20 User #${cleanBioId})`);
+    addNotification("New Member Registered", `${newMember.name} joined with ${newMember.status} status and K20 User ID #${cleanBioId}.`, "success");
+    toast.success(`Member ${newMember.name} created with K20 Biometric User #${cleanBioId}!`);
+    return { success: true, memberId: newId };
   };
 
   const updateMember = (id: string, updatedData: Partial<Member>) => {
+    if (updatedData.biometricUserId !== undefined && updatedData.biometricUserId.trim()) {
+      const check = validateBiometricUserId(updatedData.biometricUserId.trim(), id);
+      if (!check.valid) {
+        toast.error(check.error || "Biometric User ID is already assigned.");
+        return;
+      }
+    }
+
     setMembers((prev) =>
       prev.map((m) => {
         if (m.id !== id) return m;
@@ -730,6 +930,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           ...m,
           ...updatedData,
           dob: updatedData.dob !== undefined ? (updatedData.dob ? updatedData.dob.trim() : "") : m.dob,
+          biometricUserId: updatedData.biometricUserId !== undefined ? (updatedData.biometricUserId ? updatedData.biometricUserId.trim() : undefined) : m.biometricUserId,
           previousPlans,
         } as Member;
       })
@@ -931,6 +1132,162 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  const recordBiometricAttendance = (
+    recordData: Omit<Attendance, "id"> & { transactionId: string }
+  ): { success: boolean; isDuplicate?: boolean; attendanceRecord?: Attendance; error?: string } => {
+    // 1. Idempotency Check: By deterministic transactionId
+    const duplicate = attendance.find(
+      (a) => a.transactionId === recordData.transactionId
+    );
+    if (duplicate) {
+      return {
+        success: false,
+        isDuplicate: true,
+        attendanceRecord: duplicate,
+        error: "Duplicate transaction. Attendance already recorded.",
+      };
+    }
+
+    const newAttendance: Attendance = {
+      ...recordData,
+      id: `ATT-${recordData.transactionId}`,
+      source: "biometric",
+      status: "Present",
+    };
+
+    setAttendance((prev) => [newAttendance, ...prev]);
+    addActivity(
+      "attendance_marked",
+      `Biometric check-in: ${recordData.memberName} (${recordData.checkInTime || recordData.date}) via eSSL K20`
+    );
+    addNotification(
+      "Biometric Check-in",
+      `${recordData.memberName} checked in via eSSL K20 at ${recordData.checkInTime || recordData.date}.`,
+      "success"
+    );
+    toast.success(`Biometric Check-in: ${recordData.memberName} (${recordData.checkInTime})`);
+    return { success: true, isDuplicate: false, attendanceRecord: newAttendance };
+  };
+
+  const markBiometricAttendance = (
+    memberId: string,
+    date?: string,
+    checkInTime?: string
+  ): { success: boolean; attendanceRecord?: Attendance; error?: string } => {
+    const member = members.find((m) => m.id === memberId);
+    if (!member) {
+      toast.error("Member not found.");
+      return { success: false, error: "Member not found." };
+    }
+
+    const recordDate = date || new Date().toISOString().split("T")[0];
+    const now = new Date();
+    const timeStr = checkInTime || now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    const txId = `BIO_${member.id}_${recordDate}_${Date.now()}`;
+
+    const existingIndex = attendance.findIndex(
+      (a) => a.memberId === memberId && a.date === recordDate
+    );
+
+    const newAttendance: Attendance = {
+      id: `ATT-${txId}`,
+      transactionId: txId,
+      memberId: member.id,
+      memberName: member.name,
+      date: recordDate,
+      status: "Present",
+      checkInTime: timeStr,
+      source: "biometric",
+      verificationType: "Fingerprint",
+      biometricUserId: member.biometricUserId || undefined,
+      deviceId: "eSSL-K20-Scanner",
+    };
+
+    if (existingIndex >= 0) {
+      setAttendance((prev) =>
+        prev.map((a, idx) =>
+          idx === existingIndex
+            ? {
+                ...a,
+                status: "Present",
+                checkInTime: timeStr,
+                source: "biometric",
+                verificationType: "Fingerprint",
+                biometricUserId: member.biometricUserId || a.biometricUserId,
+              }
+            : a
+        )
+      );
+    } else {
+      setAttendance((prev) => [newAttendance, ...prev]);
+    }
+
+    addActivity(
+      "attendance_marked",
+      `Fingerprint check-in: ${member.name} (${timeStr}) verified via biometric scanner`
+    );
+    addNotification(
+      "Biometric Attendance",
+      `${member.name} (Fingerprint ID #${member.biometricUserId || 'N/A'}) checked in at ${timeStr}.`,
+      "success"
+    );
+
+    // Save to Firestore asynchronously
+    if (user && activeGymId) {
+      const firestoreDoc: FirestoreAttendanceDoc = {
+        id: newAttendance.id,
+        transactionId: txId,
+        ownerId: user.id,
+        gymId: activeGymId,
+        deviceId: "eSSL-K20-Scanner",
+        memberId: member.id,
+        memberName: member.name,
+        biometricUserId: member.biometricUserId || "N/A",
+        date: recordDate,
+        checkInTime: timeStr,
+        status: "Present",
+        source: "biometric",
+        verificationType: "Fingerprint",
+        createdAt: new Date().toISOString(),
+      };
+      recordBiometricAttendanceInFirestore(user.id, activeGymId, firestoreDoc).catch(() => {});
+    }
+
+    toast.success(`Fingerprint check-in recorded for ${member.name}!`);
+    return { success: true, attendanceRecord: newAttendance };
+  };
+
+  const recordBulkBiometricAttendance = (
+    records: Array<Omit<Attendance, "id"> & { transactionId?: string }>
+  ): { addedCount: number; duplicateCount: number } => {
+    let added = 0;
+    let dups = 0;
+
+    setAttendance((prev) => {
+      const updated = [...prev];
+      for (const rec of records) {
+        const txId = rec.transactionId || `ATT_SYNC_${rec.memberId}_${rec.date}_${Date.now()}`;
+        const isDup = updated.some(
+          (a) => (rec.transactionId && a.transactionId === rec.transactionId) || (a.memberId === rec.memberId && a.date === rec.date)
+        );
+        if (isDup) {
+          dups++;
+          continue;
+        }
+        added++;
+        updated.unshift({
+          ...rec,
+          id: `ATT-${txId}`,
+          source: "biometric",
+          status: "Present",
+        });
+      }
+      return updated;
+    });
+
+    return { addedCount: added, duplicateCount: dups };
+  };
+
   const updateSettings = (newSettings: Partial<GymSettings>) => {
     setSettings((prev) => ({ ...prev, ...newSettings }));
     toast.success("Gym settings saved successfully!");
@@ -971,6 +1328,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         addMember,
         updateMember,
         deleteMember,
+        assignBiometricUser,
+        unmapBiometricUser,
+        validateBiometricUserId,
+        getMemberByBiometricId,
         addTrainer,
         updateTrainer,
         deleteTrainer,
@@ -983,6 +1344,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         updateExpense,
         deleteExpense,
         markAttendance,
+        recordBiometricAttendance,
+        markBiometricAttendance,
+        recordBulkBiometricAttendance,
         addNotification,
         markNotificationAsRead,
         markAllNotificationsAsRead,

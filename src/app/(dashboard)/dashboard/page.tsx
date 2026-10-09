@@ -16,7 +16,8 @@ import {
   TrendingDown, 
   UserPlus, 
   Receipt, 
-  FileText 
+  FileText,
+  Fingerprint
 } from "lucide-react";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { motion } from "framer-motion";
@@ -83,6 +84,7 @@ export default function Dashboard() {
     addPayment,
     addExpense,
     markAttendance,
+    markBiometricAttendance,
     addNotification
   } = useApp();
 
@@ -110,7 +112,11 @@ export default function Dashboard() {
   const [expenseForm, setExpenseForm] = useState({
     title: "", category: "Electricity" as ExpenseCategory, amount: "", date: new Date().toISOString().split("T")[0], paymentMethod: "Bank Transfer" as Expense["paymentMethod"], description: ""
   });
-  const [attendanceForm, setAttendanceForm] = useState({ memberId: "", status: "Present" as "Present" | "Absent" });
+  const [attendanceForm, setAttendanceForm] = useState({ 
+    memberId: "", 
+    status: "Present" as "Present" | "Absent",
+    source: "biometric" as "biometric" | "manual"
+  });
   const [notificationForm, setNotificationForm] = useState({ title: "", message: "", type: "info" as "info" | "success" | "warning" | "error" });
 
   useEffect(() => {
@@ -283,7 +289,12 @@ export default function Dashboard() {
 
   const handleMarkAttendance = (e: React.FormEvent) => {
     e.preventDefault();
-    markAttendance(attendanceForm.memberId, attendanceForm.status);
+    if (!attendanceForm.memberId) return;
+    if (attendanceForm.source === "biometric") {
+      markBiometricAttendance(attendanceForm.memberId);
+    } else {
+      markAttendance(attendanceForm.memberId, attendanceForm.status);
+    }
     setIsMarkAttendanceOpen(false);
   };
 
@@ -787,22 +798,57 @@ export default function Dashboard() {
       <Modal isOpen={isMarkAttendanceOpen} onClose={() => setIsMarkAttendanceOpen(false)} title="Mark Member Attendance">
         <form onSubmit={handleMarkAttendance} className="space-y-4">
           <div className="space-y-1">
+            <label className="text-xs font-bold text-slate-500 uppercase">Verification Method</label>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setAttendanceForm({ ...attendanceForm, source: "biometric", status: "Present" })}
+                className={`py-2 px-3 rounded-xl border text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
+                  attendanceForm.source === "biometric"
+                    ? "bg-purple-600 text-white border-purple-600 shadow-xs"
+                    : "border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800"
+                }`}
+              >
+                <Fingerprint size={14} /> Biometric Punch
+              </button>
+              <button
+                type="button"
+                onClick={() => setAttendanceForm({ ...attendanceForm, source: "manual" })}
+                className={`py-2 px-3 rounded-xl border text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
+                  attendanceForm.source === "manual"
+                    ? "bg-blue-600 text-white border-blue-600 shadow-xs"
+                    : "border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800"
+                }`}
+              >
+                Manual Rollcall
+              </button>
+            </div>
+          </div>
+          <div className="space-y-1">
             <label className="text-xs font-bold text-slate-500 uppercase">Gym Member *</label>
             <select required value={attendanceForm.memberId} onChange={(e) => setAttendanceForm({ ...attendanceForm, memberId: e.target.value })} className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 text-sm">
               <option value="">Select Member</option>
-              {members.map(m => <option key={m.id} value={m.id}>{m.name} ({m.id})</option>)}
+              {members.map(m => (
+                <option key={m.id} value={m.id}>
+                  {m.name} ({m.id}) {m.biometricUserId ? `• FP #${m.biometricUserId}` : ""}
+                </option>
+              ))}
             </select>
           </div>
-          <div className="space-y-1">
-            <label className="text-xs font-bold text-slate-500 uppercase">Status</label>
-            <select value={attendanceForm.status} onChange={(e) => setAttendanceForm({ ...attendanceForm, status: e.target.value as "Present" | "Absent" })} className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 text-sm">
-              <option value="Present">Present (Checked-in)</option>
-              <option value="Absent">Absent</option>
-            </select>
-          </div>
+          {attendanceForm.source === "manual" && (
+            <div className="space-y-1">
+              <label className="text-xs font-bold text-slate-500 uppercase">Status</label>
+              <select value={attendanceForm.status} onChange={(e) => setAttendanceForm({ ...attendanceForm, status: e.target.value as "Present" | "Absent" })} className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 text-sm">
+                <option value="Present">Present (Checked-in)</option>
+                <option value="Absent">Absent</option>
+              </select>
+            </div>
+          )}
           <div className="flex justify-end gap-3 pt-2">
             <Button type="button" variant="ghost" onClick={() => setIsMarkAttendanceOpen(false)}>Cancel</Button>
-            <Button type="submit" className="bg-blue-600 hover:bg-blue-700 text-white">Record Rollcall</Button>
+            <Button type="submit" className={attendanceForm.source === "biometric" ? "bg-purple-600 hover:bg-purple-700 text-white" : "bg-blue-600 hover:bg-blue-700 text-white"}>
+              {attendanceForm.source === "biometric" ? "Record Biometric Punch" : "Record Rollcall"}
+            </Button>
           </div>
         </form>
       </Modal>

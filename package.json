@@ -6,7 +6,12 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "biometric:test-device": "node bridge/src/protocolDiagnostic.js",
+    "biometric:dry-run": "node bridge/src/attendanceDryRun.js",
+    "biometric:sync-live": "node bridge/src/attendanceLiveSync.js",
+    "biometric:sync-test": "node bridge/src/attendanceSyncTest.js",
+    "biometric:sync": "node bridge/src/attendanceDaemon.js"
   },
   "dependencies": {
     "@tailwindcss/postcss": "^4.3.2",
@@ -15,6 +20,7 @@
     "framer-motion": "^12.42.2",
     "lucide-react": "^1.23.0",
     "next": "16.2.9",
+    "node-zklib": "^1.3.0",
     "postcss": "^8.5.16",
     "react": "19.2.4",
     "react-dom": "19.2.4",

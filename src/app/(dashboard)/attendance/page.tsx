@@ -1,18 +1,61 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useApp } from "@/lib/context/AppContext";
+import { useAuth } from "@/lib/context/AuthContext";
 import { Button } from "@/components/ui/Button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/Table";
 import { Badge } from "@/components/ui/Badge";
 import { Modal } from "@/components/ui/Modal";
-import { Search, Fingerprint, Calendar as CalendarIcon, UserCheck, UserX, Clock, Users, ChevronLeft, ChevronRight, Download } from "lucide-react";
+import { Search, Fingerprint, Calendar as CalendarIcon, UserCheck, UserX, Clock, Users, ChevronLeft, ChevronRight, Download, RefreshCw, CheckCircle2, ShieldCheck, Sparkles, AlertCircle, Check, Radio, Zap } from "lucide-react";
 import { toast } from "sonner";
+import { subscribeToBiometricSyncState, type BiometricDeviceSyncState } from "@/lib/firebase/gymService";
 
 export default function AttendancePage() {
-  const { members, attendance, markAttendance } = useApp();
+  const { user } = useAuth();
+  const { members, attendance, markAttendance, markBiometricAttendance, recordBulkBiometricAttendance, recordBiometricAttendance, activeGymId } = useApp();
   const [activeTab, setActiveTab] = useState<"daily" | "calendar">("daily");
+
+  // Biometric device & sync state
+  const [deviceStatus, setDeviceStatus] = useState<{ status: "ONLINE" | "OFFLINE" | "CHECKING"; ip: string; port: number }>({
+    status: "ONLINE",
+    ip: "192.168.1.200",
+    port: 4370,
+  });
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [diagLoading, setDiagLoading] = useState(false);
+  const [syncState, setSyncState] = useState<BiometricDeviceSyncState | null>(null);
+  const [nowMs, setNowMs] = useState(Date.now());
+
+  // Ticking timer for real-time last-sync freshness (updates every 5s)
+  useEffect(() => {
+    const timer = setInterval(() => setNowMs(Date.now()), 5000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // Real-time listener for biometric persistent sync state
+  useEffect(() => {
+    const gymId = activeGymId || "gym_default";
+    const deviceId = `K20-${deviceStatus.ip}:${deviceStatus.port}`;
+    const unsubscribe = subscribeToBiometricSyncState(gymId, deviceId, (state) => {
+      setSyncState(state);
+    });
+    return () => {
+      unsubscribe();
+    };
+  }, [activeGymId, deviceStatus.ip, deviceStatus.port]);
+
+  const lastSyncDate = syncState?.lastSyncAt ? new Date(syncState.lastSyncAt) : null;
+  const isRecentSync = Boolean(
+    lastSyncDate && !isNaN(lastSyncDate.getTime()) && (nowMs - lastSyncDate.getTime() < 45000)
+  );
+  const autoSyncStatus = isSyncing ? "Syncing" : isRecentSync ? "ON" : "OFF";
+  const formattedLastSync = lastSyncDate && !isNaN(lastSyncDate.getTime())
+    ? (nowMs - lastSyncDate.getTime() < 10000
+        ? "Just now"
+        : lastSyncDate.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: true }))
+    : "Never";
 
   const handleExportAttendance = () => {
     if (attendance.length === 0) {
@@ -36,24 +79,129 @@ export default function AttendancePage() {
   const [checkInMemberId, setCheckInMemberId] = useState("");
   const [checkInStatus, setCheckInStatus] = useState<"Present" | "Absent">("Present");
 
+  // Biometric punch modal states
+  const [isBiometricPunchOpen, setIsBiometricPunchOpen] = useState(false);
+  const [biometricPunchMemberId, setBiometricPunchMemberId] = useState("");
+  const [biometricPunchBioIdInput, setBiometricPunchBioIdInput] = useState("");
+  const [biometricPunchDate, setBiometricPunchDate] = useState(new Date().toISOString().split("T")[0]);
+  const [biometricPunchTime, setBiometricPunchTime] = useState("");
+  const [biometricPunchMode, setBiometricPunchMode] = useState<"member" | "bioId">("member");
+  const [isPunchingAnim, setIsPunchingAnim] = useState(false);
+
   // Calendar specific state
   const [currentMonth, setCurrentMonth] = useState(new Date().getMonth());
   const [currentYear, setCurrentYear] = useState(new Date().getFullYear());
   const [eventFilter, setEventFilter] = useState<"all" | "birthdays" | "renewals">("all");
   const [selectedDayModal, setSelectedDayModal] = useState<{ day: number; dateStr: string; events: any[] } | null>(null);
 
-  const activeMembers = members.filter(m => m.status === "Active");
-  const totalExpected = activeMembers.length;
+  const [statusFilter, setStatusFilter] = useState<"all" | "present" | "absent">("all");
+  const [isLiveListening, setIsLiveListening] = useState<boolean>(true);
 
-  const filteredAttendance = attendance.filter(a => a.date === selectedDate);
-  const presentToday = filteredAttendance.filter(a => a.status === "Present").length;
-  const absentToday = Math.max(0, totalExpected - presentToday);
-  const attendanceRate = totalExpected > 0 ? Math.round((presentToday / totalExpected) * 100) : 0;
+  // Real-time live polling from eSSL K20 (every 12 seconds)
+  useEffect(() => {
+    if (!isLiveListening || activeTab !== "daily") return;
 
-  const searchedLogs = filteredAttendance.filter(log => 
-    log.memberName.toLowerCase().includes(search.toLowerCase()) || 
-    log.memberId.toLowerCase().includes(search.toLowerCase())
-  );
+    const interval = setInterval(async () => {
+      try {
+        const payload = {
+          ownerId: user?.id || "owner_default",
+          gymId: activeGymId || "gym_default",
+          maxRecords: 100,
+          members: members.map((m) => ({
+            id: m.id,
+            name: m.name,
+            biometricUserId: m.biometricUserId,
+            status: m.status,
+          })),
+        };
+
+        const res = await fetch("/api/biometric/sync-live", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+
+        const data = await res.json();
+        if (data.success && data.recordsWritten > 0) {
+          if (Array.isArray(data.attendanceRecords) && data.attendanceRecords.length > 0) {
+            recordBulkBiometricAttendance(data.attendanceRecords);
+            toast.success(`⚡ Live Fingerprint scan detected! ${data.recordsWritten} attendance record(s) loaded.`);
+          } else if (data.attendanceRecord) {
+            recordBiometricAttendance(data.attendanceRecord);
+            toast.success(`⚡ Fingerprint check-in: ${data.attendanceRecord.memberName} marked Present!`);
+          }
+        }
+      } catch {
+        // Silent background catch
+      }
+    }, 12000);
+
+    return () => clearInterval(interval);
+  }, [isLiveListening, activeTab, user?.id, activeGymId, members, recordBulkBiometricAttendance, recordBiometricAttendance]);
+
+  // Attendance lookup for selected date
+  const attendanceMap = new Map<string, (typeof attendance)[0]>();
+  attendance
+    .filter((a) => a.date === selectedDate)
+    .forEach((a) => {
+      attendanceMap.set(a.memberId, a);
+    });
+
+  // Build unified roll call for all active members (plus any member with a scan on this date)
+  const dailyRoster = members
+    .filter((m) => m.status === "Active" || attendanceMap.has(m.id))
+    .map((member) => {
+      const attRecord = attendanceMap.get(member.id);
+      const isPresent = attRecord?.status === "Present";
+      return {
+        member,
+        status: isPresent ? ("Present" as const) : ("Absent" as const),
+        checkInTime: isPresent ? attRecord?.checkInTime : undefined,
+        source: attRecord?.source || (isPresent && (attRecord?.biometricUserId || member.biometricUserId) ? "biometric" : undefined),
+        verificationType: attRecord?.verificationType || (attRecord?.source === "biometric" ? "Fingerprint" : undefined),
+        biometricUserId: member.biometricUserId || attRecord?.biometricUserId,
+        attendanceId: attRecord?.id,
+      };
+    })
+    .sort((a, b) => {
+      // Present members first, then Absent members alphabetically
+      if (a.status === "Present" && b.status !== "Present") return -1;
+      if (a.status !== "Present" && b.status === "Present") return 1;
+      return a.member.name.localeCompare(b.member.name);
+    });
+
+  const presentCount = dailyRoster.filter((r) => r.status === "Present").length;
+  const absentCount = dailyRoster.filter((r) => r.status === "Absent").length;
+  const totalExpected = dailyRoster.length;
+  const attendanceRate = totalExpected > 0 ? Math.round((presentCount / totalExpected) * 100) : 0;
+
+  const searchedRoster = dailyRoster.filter((item) => {
+    // 1. Status Filter Tab
+    if (statusFilter === "present" && item.status !== "Present") return false;
+    if (statusFilter === "absent" && item.status !== "Absent") return false;
+
+    // 2. Search query matching
+    if (!search.trim()) return true;
+    const q = search.toLowerCase().trim();
+    const nameMatch = item.member.name.toLowerCase().includes(q);
+    const idMatch = item.member.id.toLowerCase().includes(q);
+    const bioIdMatch = item.biometricUserId ? String(item.biometricUserId).toLowerCase().includes(q) : false;
+    const mobileMatch = item.member.mobile ? item.member.mobile.includes(q) : false;
+    return nameMatch || idMatch || bioIdMatch || mobileMatch;
+  });
+
+  const handleQuickBiometricPunch = (memberId: string) => {
+    const mem = members.find((m) => m.id === memberId);
+    if (!mem) return;
+    const now = new Date();
+    const timeStr = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    markBiometricAttendance(memberId, selectedDate, timeStr);
+  };
+
+  const handleQuickToggleAttendance = (memberId: string, currentStatus: "Present" | "Absent") => {
+    const nextStatus = currentStatus === "Present" ? "Absent" : "Present";
+    markAttendance(memberId, nextStatus, selectedDate);
+  };
 
   const handleManualCheckIn = (e: React.FormEvent) => {
     e.preventDefault();
@@ -62,6 +210,124 @@ export default function AttendancePage() {
     setIsCheckInOpen(false);
     setCheckInMemberId("");
     setCheckInStatus("Present");
+  };
+
+  const openBiometricPunchModal = () => {
+    const now = new Date();
+    const timeStr = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    setBiometricPunchTime(timeStr);
+    setBiometricPunchDate(selectedDate || new Date().toISOString().split("T")[0]);
+    setIsBiometricPunchOpen(true);
+  };
+
+  const handleBiometricPunch = (e: React.FormEvent) => {
+    e.preventDefault();
+    let targetMember: (typeof members)[0] | undefined;
+
+    if (biometricPunchMode === "bioId") {
+      const cleanId = biometricPunchBioIdInput.trim();
+      if (!cleanId) {
+        toast.error("Please enter a Biometric Hardware User ID (e.g. 19, 34, 35)");
+        return;
+      }
+      targetMember = members.find((m) => m.biometricUserId === cleanId);
+      if (!targetMember) {
+        toast.error(`No registered member mapped to Fingerprint User ID #${cleanId}. Please check member profile.`);
+        return;
+      }
+    } else {
+      if (!biometricPunchMemberId) {
+        toast.error("Please select a gym member to punch attendance.");
+        return;
+      }
+      targetMember = members.find((m) => m.id === biometricPunchMemberId);
+    }
+
+    if (!targetMember) return;
+
+    setIsPunchingAnim(true);
+    setTimeout(() => {
+      markBiometricAttendance(targetMember.id, biometricPunchDate, biometricPunchTime);
+      setIsPunchingAnim(false);
+      setIsBiometricPunchOpen(false);
+      setBiometricPunchMemberId("");
+      setBiometricPunchBioIdInput("");
+    }, 350);
+  };
+
+  const checkDeviceDiagnostics = async () => {
+    setDiagLoading(true);
+    try {
+      const res = await fetch("/api/biometric/diagnostics");
+      const data = await res.json();
+      if (data.status === "ONLINE") {
+        setDeviceStatus({
+          status: "ONLINE",
+          ip: data.device?.deviceIp || "192.168.1.200",
+          port: data.device?.devicePort || 4370,
+        });
+        toast.success("eSSL / Identix K20 is ONLINE (TCP 4370 reachable)");
+      } else {
+        setDeviceStatus({
+          status: "OFFLINE",
+          ip: data.device?.deviceIp || "192.168.1.200",
+          port: data.device?.devicePort || 4370,
+        });
+        toast.warning("Biometric device unreachable on TCP 4370");
+      }
+    } catch {
+      setDeviceStatus({ status: "OFFLINE", ip: "192.168.1.200", port: 4370 });
+      toast.error("Failed running biometric diagnostics");
+    } finally {
+      setDiagLoading(false);
+    }
+  };
+
+  const handleSyncBiometric = async () => {
+    setIsSyncing(true);
+    try {
+      const payload = {
+        ownerId: user?.id || "owner_default",
+        gymId: activeGymId || "gym_default",
+        maxRecords: 100, // Load all daily biometric scans
+        members: members.map((m) => ({
+          id: m.id,
+          name: m.name,
+          biometricUserId: m.biometricUserId,
+          status: m.status,
+        })),
+      };
+
+      const res = await fetch("/api/biometric/sync-live", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok || !data.success) {
+        toast.error(data.error || "Biometric sync failed");
+        return;
+      }
+
+      if (data.recordsWritten > 0) {
+        if (Array.isArray(data.attendanceRecords) && data.attendanceRecords.length > 0) {
+          recordBulkBiometricAttendance(data.attendanceRecords);
+          toast.success(`Loaded ${data.recordsWritten} daily biometric attendance records from K20!`);
+        } else if (data.attendanceRecord) {
+          recordBiometricAttendance(data.attendanceRecord);
+          toast.success(`Loaded biometric attendance record for ${data.attendanceRecord.memberName}!`);
+        }
+      } else {
+        toast.info(data.message || "All biometric logs up to date (0 duplicates written).");
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Sync failed";
+      toast.error(`Sync error: ${msg}`);
+    } finally {
+      setIsSyncing(false);
+    }
   };
 
   // Calendar calculations
@@ -165,8 +431,37 @@ export default function AttendancePage() {
           <h1 className="text-2xl font-bold text-slate-800 dark:text-slate-100 tracking-tight">Attendance & Events Portal</h1>
           <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">Track check-ins and look up calendar events.</p>
         </div>
-        <div className="flex items-center gap-3">
-          <Button variant="outline" size="sm" onClick={handleExportAttendance} className="gap-2 border-slate-200 dark:border-slate-800 dark:text-slate-350">
+        <div className="flex flex-wrap items-center gap-2.5">
+          <button
+            onClick={() => {
+              setIsLiveListening(!isLiveListening);
+              toast.info(isLiveListening ? "Auto-sync live listener paused" : "Auto-sync live listener activated (polling every 12s)");
+            }}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all shadow-xs ${
+              isLiveListening 
+                ? "bg-emerald-50 text-emerald-700 border-emerald-300 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800" 
+                : "bg-slate-100 text-slate-600 border-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:border-slate-700"
+            }`}
+            title="Auto-detect new fingerprint scans from eSSL K20 terminal in real time"
+          >
+            <Radio size={13} className={isLiveListening ? "animate-pulse text-emerald-600 dark:text-emerald-400" : ""} />
+            <span>Live Scanner: {isLiveListening ? "Active (12s)" : "Paused"}</span>
+          </button>
+          <Button 
+            onClick={openBiometricPunchModal} 
+            className="gap-1.5 bg-purple-600 hover:bg-purple-700 text-white text-xs font-semibold shadow-xs"
+          >
+            <Fingerprint size={14} /> Biometric Punch
+          </Button>
+          <Button 
+            onClick={handleSyncBiometric} 
+            disabled={isSyncing} 
+            className="gap-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shadow-xs"
+          >
+            <RefreshCw size={13} className={isSyncing ? "animate-spin" : ""} /> 
+            {isSyncing ? "Loading Device Logs..." : "Load K20 Scans"}
+          </Button>
+          <Button variant="outline" size="sm" onClick={handleExportAttendance} className="gap-2 border-slate-200 dark:border-slate-800 dark:text-slate-300">
             <Download size={14} /> Export CSV
           </Button>
           <div className="flex items-center gap-3 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-1 shadow-sm">
@@ -174,7 +469,7 @@ export default function AttendancePage() {
               onClick={() => setActiveTab("daily")}
               className={`px-4 py-2 rounded-lg text-xs font-bold transition-colors ${activeTab === "daily" ? "bg-blue-600 text-white" : "text-slate-500 hover:text-slate-700"}`}
             >
-              Daily Check-Ins
+              Daily Roll Call
             </button>
             <button 
               onClick={() => setActiveTab("calendar")}
@@ -196,7 +491,7 @@ export default function AttendancePage() {
                   <Users size={24} />
                 </div>
                 <div>
-                  <p className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Expected Active</p>
+                  <p className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Total Expected</p>
                   <h4 className="text-2xl font-bold text-slate-800 dark:text-white mt-0.5">{totalExpected}</h4>
                 </div>
               </CardContent>
@@ -208,18 +503,18 @@ export default function AttendancePage() {
                 </div>
                 <div>
                   <p className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Present Today</p>
-                  <h4 className="text-2xl font-bold text-slate-800 dark:text-white mt-0.5">{presentToday}</h4>
+                  <h4 className="text-2xl font-bold text-emerald-600 dark:text-emerald-400 mt-0.5">{presentCount}</h4>
                 </div>
               </CardContent>
             </Card>
-            <Card className="bg-slate-50/50 dark:bg-slate-800/10 border border-slate-100 dark:border-slate-800/50">
+            <Card className="bg-rose-50/50 dark:bg-rose-950/10 border border-rose-100 dark:border-rose-900/50">
               <CardContent className="p-5 flex items-center gap-4">
-                <div className="p-3 bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded-xl">
+                <div className="p-3 bg-rose-100 dark:bg-rose-950 text-rose-600 dark:text-rose-400 rounded-xl">
                   <UserX size={24} />
                 </div>
                 <div>
                   <p className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Absent Today</p>
-                  <h4 className="text-2xl font-bold text-slate-800 dark:text-white mt-0.5">{absentToday}</h4>
+                  <h4 className="text-2xl font-bold text-rose-600 dark:text-rose-400 mt-0.5">{absentCount}</h4>
                 </div>
               </CardContent>
             </Card>
@@ -238,65 +533,213 @@ export default function AttendancePage() {
 
           {/* Main Layout Grid */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            <Card className="lg:col-span-2 dark:bg-slate-900 dark:border-slate-800">
-              <div className="p-4 border-b border-slate-100 dark:border-slate-800 flex flex-col sm:flex-row gap-4 justify-between items-center bg-slate-50/50 dark:bg-slate-900/50 rounded-t-2xl">
+            <Card className="lg:col-span-2 dark:bg-slate-900 dark:border-slate-800 overflow-hidden">
+              {/* Filter Tabs Header */}
+              <div className="p-3.5 border-b border-slate-100 dark:border-slate-800 flex flex-wrap items-center justify-between gap-3 bg-slate-50/60 dark:bg-slate-900/60">
+                <div className="flex items-center gap-1.5">
+                  <button
+                    onClick={() => setStatusFilter("all")}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${
+                      statusFilter === "all"
+                        ? "bg-blue-600 text-white shadow-xs font-bold"
+                        : "text-slate-600 dark:text-slate-400 hover:bg-slate-200/60 dark:hover:bg-slate-800"
+                    }`}
+                  >
+                    All Members ({totalExpected})
+                  </button>
+                  <button
+                    onClick={() => setStatusFilter("present")}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all ${
+                      statusFilter === "present"
+                        ? "bg-emerald-600 text-white shadow-xs font-bold"
+                        : "text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/40"
+                    }`}
+                  >
+                    <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+                    Present ({presentCount})
+                  </button>
+                  <button
+                    onClick={() => setStatusFilter("absent")}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all ${
+                      statusFilter === "absent"
+                        ? "bg-rose-600 text-white shadow-xs font-bold"
+                        : "text-rose-700 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40"
+                    }`}
+                  >
+                    <span className="w-2 h-2 rounded-full bg-rose-500"></span>
+                    Absent ({absentCount})
+                  </button>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <input
+                    type="date"
+                    value={selectedDate}
+                    onChange={(e) => setSelectedDate(e.target.value)}
+                    className="px-2.5 py-1.5 border border-slate-200 dark:border-slate-800 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 text-xs shadow-xs"
+                  />
+                  <Button 
+                    onClick={() => setIsCheckInOpen(true)} 
+                    variant="outline"
+                    size="sm"
+                    className="text-xs whitespace-nowrap border-slate-200 dark:border-slate-800 dark:text-slate-300"
+                  >
+                    Manual Roll
+                  </Button>
+                </div>
+              </div>
+
+              {/* Search Bar */}
+              <div className="p-3 border-b border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900">
                 <div className="relative w-full">
                   <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                    <Search size={16} className="text-slate-400" />
+                    <Search size={15} className="text-slate-400" />
                   </div>
                   <input
                     type="text"
                     value={search}
                     onChange={(e) => setSearch(e.target.value)}
-                    className="block w-full pl-9 pr-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl leading-5 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 sm:text-sm shadow-sm"
-                    placeholder="Search check-in logs by name or ID..."
+                    className="block w-full pl-9 pr-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl leading-5 bg-slate-50/50 dark:bg-slate-800/60 text-slate-800 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 text-xs sm:text-sm shadow-xs"
+                    placeholder="Search by Name, Member ID, or Fingerprint User ID (#19, #34)..."
                   />
-                </div>
-                <div className="flex gap-2">
-                  <input
-                    type="date"
-                    value={selectedDate}
-                    onChange={(e) => setSelectedDate(e.target.value)}
-                    className="px-3 py-2 border border-slate-200 dark:border-slate-800 rounded-xl bg-white dark:bg-slate-900 text-slate-805 dark:text-slate-100 text-xs sm:text-sm shadow-sm"
-                  />
-                  <Button onClick={() => setIsCheckInOpen(true)} className="bg-blue-600 hover:bg-blue-700 text-white text-xs whitespace-nowrap">
-                    Manual Roll
-                  </Button>
                 </div>
               </div>
               
+              {/* Daily Roll Call Table */}
               <div className="overflow-x-auto">
                 <Table>
                   <TableHeader>
-                    <TableRow className="dark:border-slate-800">
-                      <TableHead>Member ID</TableHead>
-                      <TableHead>Name</TableHead>
+                    <TableRow className="dark:border-slate-800 bg-slate-50/70 dark:bg-slate-800/50 text-xs">
+                      <TableHead>Member & Fingerprint</TableHead>
+                      <TableHead>ID</TableHead>
                       <TableHead>Check-in Time</TableHead>
-                      <TableHead>Date</TableHead>
+                      <TableHead>Attendance Method</TableHead>
                       <TableHead>Status</TableHead>
+                      <TableHead className="text-right">Quick Action</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {searchedLogs.length === 0 ? (
+                    {searchedRoster.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={5} className="text-center text-slate-405 dark:text-slate-500 py-6">No check-in records for this date.</TableCell>
+                        <TableCell colSpan={6} className="text-center text-slate-400 dark:text-slate-500 py-10 space-y-1">
+                          <Users size={28} className="mx-auto text-slate-300 dark:text-slate-600 mb-1" />
+                          <p className="font-semibold text-sm">No members match your filter</p>
+                          <p className="text-xs">Try selecting &quot;All Members&quot; or clearing your search query.</p>
+                        </TableCell>
                       </TableRow>
                     ) : (
-                      searchedLogs.map((log) => (
-                        <TableRow key={log.id} className="dark:border-slate-800">
-                          <TableCell className="font-mono text-xs">{log.memberId}</TableCell>
-                          <TableCell className="font-semibold text-slate-800 dark:text-slate-200">{log.memberName}</TableCell>
-                          <TableCell className="text-slate-650 dark:text-slate-400 font-medium">
-                            <div className="flex items-center gap-1.5 text-sm">
-                              <Clock size={14} className="text-slate-400" />
-                              {log.checkInTime || "N/A"}
+                      searchedRoster.map((item) => (
+                        <TableRow key={item.member.id} className="dark:border-slate-800 hover:bg-slate-50/80 dark:hover:bg-slate-800/40">
+                          {/* Member Info */}
+                          <TableCell>
+                            <div className="flex items-center gap-2.5">
+                              <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs shrink-0 ${
+                                item.status === "Present" 
+                                  ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800" 
+                                  : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300"
+                              }`}>
+                                {item.member.name.slice(0, 2).toUpperCase()}
+                              </div>
+                              <div>
+                                <p className="font-semibold text-slate-800 dark:text-slate-100 text-sm flex items-center gap-1.5">
+                                  {item.member.name}
+                                </p>
+                                <div className="flex items-center gap-1.5 mt-0.5">
+                                  {item.biometricUserId ? (
+                                    <span className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded text-[10px] font-semibold bg-purple-50 text-purple-700 border border-purple-200 dark:bg-purple-950/50 dark:text-purple-300 dark:border-purple-800">
+                                      <Fingerprint size={10} /> FP #{item.biometricUserId}
+                                    </span>
+                                  ) : (
+                                    <span className="text-[10px] text-slate-400">No FP ID</span>
+                                  )}
+                                  <span className="text-[11px] text-slate-400 font-mono">• {item.member.mobile}</span>
+                                </div>
+                              </div>
                             </div>
                           </TableCell>
-                          <TableCell className="text-slate-500 text-sm">{log.date}</TableCell>
+
+                          {/* Member ID */}
+                          <TableCell className="font-mono text-xs text-slate-600 dark:text-slate-400 font-medium">
+                            {item.member.id}
+                          </TableCell>
+
+                          {/* Check-in Time */}
                           <TableCell>
-                            <Badge variant={log.status === "Present" ? "success" : "danger"}>
-                              {log.status}
-                            </Badge>
+                            {item.status === "Present" ? (
+                              <div className="flex items-center gap-1.5 text-xs font-semibold text-emerald-700 dark:text-emerald-400">
+                                <Clock size={13} className="text-emerald-500" />
+                                {item.checkInTime || "Recorded"}
+                              </div>
+                            ) : (
+                              <span className="text-slate-400 dark:text-slate-500 text-xs font-mono">
+                                -- Not Scanned --
+                              </span>
+                            )}
+                          </TableCell>
+
+                          {/* Source / Method */}
+                          <TableCell>
+                            {item.status === "Present" ? (
+                              item.source === "biometric" ? (
+                                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-purple-100 text-purple-800 border border-purple-200 dark:bg-purple-950/60 dark:text-purple-300 dark:border-purple-800">
+                                  <Fingerprint size={12} className="text-purple-600 dark:text-purple-400" /> Biometric FP
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-slate-100 text-slate-700 border border-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700">
+                                  Manual Roll
+                                </span>
+                              )
+                            ) : (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium bg-rose-50 text-rose-700 border border-rose-200 dark:bg-rose-950/40 dark:text-rose-300 dark:border-rose-900">
+                                No Scan / Absent
+                              </span>
+                            )}
+                          </TableCell>
+
+                          {/* Status Badge */}
+                          <TableCell>
+                            {item.status === "Present" ? (
+                              <Badge variant="success" className="gap-1 font-semibold text-xs py-0.5 px-2.5">
+                                <Check size={12} /> Present
+                              </Badge>
+                            ) : (
+                              <Badge variant="danger" className="gap-1 font-semibold text-xs py-0.5 px-2.5">
+                                <UserX size={12} /> Absent
+                              </Badge>
+                            )}
+                          </TableCell>
+
+                          {/* Quick Actions */}
+                          <TableCell className="text-right">
+                            <div className="flex items-center justify-end gap-1.5">
+                              {item.status === "Absent" ? (
+                                <>
+                                  <Button
+                                    size="sm"
+                                    onClick={() => handleQuickBiometricPunch(item.member.id)}
+                                    className="h-7 text-xs px-2.5 bg-purple-600 hover:bg-purple-700 text-white font-semibold gap-1 shadow-xs"
+                                    title="Record biometric fingerprint punch for this member"
+                                  >
+                                    <Fingerprint size={12} /> Punch FP
+                                  </Button>
+                                  <button
+                                    onClick={() => handleQuickToggleAttendance(item.member.id, "Absent")}
+                                    className="h-7 text-[11px] px-2 rounded-lg border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                                    title="Mark Present manually"
+                                  >
+                                    Present
+                                  </button>
+                                </>
+                              ) : (
+                                <button
+                                  onClick={() => handleQuickToggleAttendance(item.member.id, "Present")}
+                                  className="h-7 text-[11px] px-2 rounded-lg border border-rose-200 text-rose-600 dark:border-rose-900 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/30 transition-colors"
+                                  title="Mark Absent"
+                                >
+                                  Mark Absent
+                                </button>
+                              )}
+                            </div>
                           </TableCell>
                         </TableRow>
                       ))
@@ -309,27 +752,96 @@ export default function AttendancePage() {
             {/* Biometric Status Widgets */}
             <Card className="h-fit dark:bg-slate-900 dark:border-slate-800">
               <CardHeader className="bg-slate-900 dark:bg-slate-950 text-white rounded-t-2xl">
-                <CardTitle className="text-white flex items-center gap-2 text-md">
-                  <Fingerprint size={20} className="text-blue-400" />
-                  Biometric Device Status
+                <CardTitle className="text-white flex items-center justify-between text-md">
+                  <div className="flex items-center gap-2">
+                    <Fingerprint size={20} className="text-blue-400" />
+                    Biometric Terminal
+                  </div>
+                  <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                    deviceStatus.status === "ONLINE" 
+                      ? "bg-green-500/20 text-green-300 border border-green-500/30" 
+                      : "bg-red-500/20 text-red-300 border border-red-500/30"
+                  }`}>
+                    <span className={`w-1.5 h-1.5 rounded-full ${deviceStatus.status === "ONLINE" ? "bg-green-400 animate-pulse" : "bg-red-400"}`}></span>
+                    {deviceStatus.status}
+                  </span>
                 </CardTitle>
               </CardHeader>
-              <CardContent className="p-6 space-y-4">
-                <div className="flex flex-col items-center justify-center py-6 text-center space-y-4">
-                  <div className="relative">
-                    <div className="w-20 h-20 rounded-full border-4 border-slate-100 dark:border-slate-800 flex items-center justify-center bg-slate-50 dark:bg-slate-900">
-                      <Fingerprint size={40} className="text-slate-300 dark:text-slate-700" />
-                    </div>
-                    <div className="absolute -bottom-1 -right-1 w-5 h-5 bg-red-500 rounded-full border-2 border-white dark:border-slate-900 flex items-center justify-center">
-                      <span className="w-1.5 h-1.5 bg-white rounded-full"></span>
-                    </div>
+              <CardContent className="p-5 space-y-4">
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-100 dark:border-slate-800 text-xs">
+                    <span className="text-slate-500 dark:text-slate-400">Device Model</span>
+                    <span className="font-semibold text-slate-800 dark:text-slate-200">eSSL / Identix K20</span>
                   </div>
-                  <div>
-                    <h4 className="text-md font-bold text-slate-800 dark:text-white">Device Offline</h4>
-                    <p className="text-xs text-slate-505 dark:text-slate-400 mt-1 max-w-[220px]">Scanner is not connected to USB port.</p>
+                  <div className="flex items-center justify-between p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-100 dark:border-slate-800 text-xs">
+                    <span className="text-slate-500 dark:text-slate-400">Network Endpoint</span>
+                    <span className="font-mono font-medium text-slate-800 dark:text-slate-200">{deviceStatus.ip}:{deviceStatus.port}</span>
                   </div>
-                  <Button variant="outline" className="w-full text-xs dark:border-slate-800 dark:text-slate-300">Run Diagnostics</Button>
+                  <div className="flex items-center justify-between p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-100 dark:border-slate-800 text-xs">
+                    <span className="text-slate-500 dark:text-slate-400">Sync State Source</span>
+                    <span className="font-semibold text-blue-600 dark:text-blue-400">Firestore Persistent</span>
+                  </div>
+                  <div className="flex items-center justify-between p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-100 dark:border-slate-800 text-xs">
+                    <span className="text-slate-500 dark:text-slate-400">Automatic Sync</span>
+                    <span className="inline-flex items-center gap-1.5 font-semibold">
+                      <span className={`w-2 h-2 rounded-full ${
+                        autoSyncStatus === "ON" 
+                          ? "bg-emerald-500 animate-pulse" 
+                          : autoSyncStatus === "Syncing" 
+                          ? "bg-amber-500 animate-spin" 
+                          : "bg-rose-500"
+                      }`} />
+                      <span className={
+                        autoSyncStatus === "ON" 
+                          ? "text-emerald-600 dark:text-emerald-400" 
+                          : autoSyncStatus === "Syncing" 
+                          ? "text-amber-600 dark:text-amber-400" 
+                          : "text-rose-600 dark:text-rose-400"
+                      }>
+                        {autoSyncStatus}
+                      </span>
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-100 dark:border-slate-800 text-xs">
+                    <span className="text-slate-500 dark:text-slate-400">Last Sync</span>
+                    <span className="font-mono font-medium text-slate-700 dark:text-slate-300">
+                      {formattedLastSync}
+                    </span>
+                  </div>
                 </div>
+
+                <div className="space-y-2 pt-1">
+                  <Button 
+                    onClick={openBiometricPunchModal} 
+                    className="w-full bg-purple-600 hover:bg-purple-700 text-white text-xs gap-2 py-2.5 shadow-sm font-semibold"
+                  >
+                    <Fingerprint size={15} />
+                    Biometric Fingerprint Punch
+                  </Button>
+
+                  <Button 
+                    onClick={handleSyncBiometric} 
+                    disabled={isSyncing}
+                    className="w-full bg-blue-600 hover:bg-blue-700 text-white text-xs gap-2 py-2.5 shadow-sm font-semibold"
+                  >
+                    <RefreshCw size={14} className={isSyncing ? "animate-spin" : ""} />
+                    {isSyncing ? "Loading Device Attendance..." : "Load K20 Daily Attendance"}
+                  </Button>
+
+                  <Button 
+                    variant="outline" 
+                    onClick={checkDeviceDiagnostics} 
+                    disabled={diagLoading}
+                    className="w-full text-xs dark:border-slate-800 dark:text-slate-300 gap-2"
+                  >
+                    <CheckCircle2 size={14} className={diagLoading ? "animate-spin" : "text-slate-400"} />
+                    {diagLoading ? "Checking Reachability..." : "Check Device Connectivity"}
+                  </Button>
+                </div>
+
+                <p className="text-[11px] text-slate-400 dark:text-slate-500 text-center leading-relaxed">
+                  Watermark baseline active: 17,356 historical logs safely excluded.
+                </p>
               </CardContent>
             </Card>
           </div>
@@ -405,7 +917,7 @@ export default function AttendancePage() {
                     {day ? (
                       <>
                         <div className="flex justify-between items-center">
-                          <span className={`text-xs font-bold ${isToday ? 'bg-blue-600 text-white w-5 h-5 rounded-full flex items-center justify-center' : 'text-slate-850 dark:text-slate-200'}`}>
+                          <span className={`text-xs font-bold ${isToday ? 'bg-blue-600 text-white w-5 h-5 rounded-full flex items-center justify-center' : 'text-slate-800 dark:text-slate-200'}`}>
                             {day}
                           </span>
                           {events.length > 0 && (
@@ -418,7 +930,7 @@ export default function AttendancePage() {
                           {events.map((ev, evIdx) => (
                             <div 
                               key={evIdx} 
-                              className={`text-[8px] sm:text-[10px] font-semibold truncate rounded px-1.5 py-0.5 shadow-2xs ${ev.color}`}
+                              className={`text-[8px] sm:text-[10px] font-semibold truncate rounded px-1.5 py-0.5 shadow-xs ${ev.color}`}
                               title={ev.label}
                             >
                               {ev.label}
@@ -444,7 +956,7 @@ export default function AttendancePage() {
               required 
               value={checkInMemberId} 
               onChange={(e) => setCheckInMemberId(e.target.value)} 
-              className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-805 dark:text-slate-100 text-sm outline-none"
+              className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 text-sm outline-none"
             >
               <option value="">Select Member</option>
               {members.map(m => (
@@ -457,7 +969,7 @@ export default function AttendancePage() {
             <select 
               value={checkInStatus} 
               onChange={(e) => setCheckInStatus(e.target.value as "Present" | "Absent")} 
-              className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-805 dark:text-slate-100 text-sm outline-none"
+              className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 text-sm outline-none"
             >
               <option value="Present">Present</option>
               <option value="Absent">Absent</option>
@@ -466,6 +978,211 @@ export default function AttendancePage() {
           <div className="flex justify-end gap-3 pt-2">
             <Button type="button" variant="ghost" onClick={() => setIsCheckInOpen(false)}>Cancel</Button>
             <Button type="submit" className="bg-blue-600 hover:bg-blue-700 text-white">Record Check-in</Button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Biometric Fingerprint Attendance Modal */}
+      <Modal 
+        isOpen={isBiometricPunchOpen} 
+        onClose={() => setIsBiometricPunchOpen(false)} 
+        title="Biometric Fingerprint Attendance"
+      >
+        <form onSubmit={handleBiometricPunch} className="space-y-4">
+          <p className="text-xs text-slate-500 dark:text-slate-400">
+            Record biometric fingerprint check-in for an existing gym member. The punch will instantly update the roll call.
+          </p>
+
+          {/* Mode Switch Tabs */}
+          <div className="flex p-1 bg-slate-100 dark:bg-slate-800 rounded-xl text-xs font-semibold">
+            <button
+              type="button"
+              onClick={() => setBiometricPunchMode("member")}
+              className={`flex-1 py-1.5 rounded-lg transition-all flex items-center justify-center gap-1.5 ${
+                biometricPunchMode === "member"
+                  ? "bg-white dark:bg-slate-900 text-purple-700 dark:text-purple-300 shadow-xs font-bold"
+                  : "text-slate-500 hover:text-slate-800 dark:hover:text-slate-200"
+              }`}
+            >
+              <Users size={13} />
+              Select Existing Member
+            </button>
+            <button
+              type="button"
+              onClick={() => setBiometricPunchMode("bioId")}
+              className={`flex-1 py-1.5 rounded-lg transition-all flex items-center justify-center gap-1.5 ${
+                biometricPunchMode === "bioId"
+                  ? "bg-white dark:bg-slate-900 text-purple-700 dark:text-purple-300 shadow-xs font-bold"
+                  : "text-slate-500 hover:text-slate-800 dark:hover:text-slate-200"
+              }`}
+            >
+              <Fingerprint size={13} />
+              Punch by Fingerprint ID (#)
+            </button>
+          </div>
+
+          {biometricPunchMode === "member" ? (
+            <div className="space-y-2.5">
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium text-slate-700 dark:text-slate-300">
+                  Gym Member *
+                </label>
+                <select 
+                  required 
+                  value={biometricPunchMemberId} 
+                  onChange={(e) => setBiometricPunchMemberId(e.target.value)} 
+                  className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 text-sm outline-none focus:ring-2 focus:ring-purple-500"
+                >
+                  <option value="">-- Select Member --</option>
+                  {members.map(m => (
+                    <option key={m.id} value={m.id}>
+                      {m.name} ({m.id}) {m.biometricUserId ? `• FP #${m.biometricUserId}` : "• (No FP ID)"}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Selected Member Preview Card */}
+              {(() => {
+                const sel = members.find(m => m.id === biometricPunchMemberId);
+                if (!sel) return null;
+                return (
+                  <div className="p-3 bg-purple-50/70 dark:bg-purple-950/30 rounded-xl border border-purple-200 dark:border-purple-800/60 flex items-center justify-between text-xs">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-8 h-8 rounded-full bg-purple-100 dark:bg-purple-900/60 text-purple-700 dark:text-purple-300 flex items-center justify-center font-bold text-xs">
+                        {sel.name.slice(0, 2).toUpperCase()}
+                      </div>
+                      <div>
+                        <p className="font-bold text-slate-800 dark:text-slate-100 text-xs">{sel.name}</p>
+                        <p className="text-[10px] text-slate-500">
+                          {sel.mobile} • Status: {sel.status}
+                        </p>
+                      </div>
+                    </div>
+                    {sel.biometricUserId ? (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-purple-100 text-purple-800 border border-purple-200 dark:bg-purple-950 dark:text-purple-300 dark:border-purple-800">
+                        <Fingerprint size={12} /> FP #{sel.biometricUserId}
+                      </span>
+                    ) : (
+                      <span className="text-[10px] text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/50 px-2 py-0.5 rounded border border-amber-200 dark:border-amber-900">
+                        Fingerprint Punch
+                      </span>
+                    )}
+                  </div>
+                );
+              })()}
+            </div>
+          ) : (
+            <div className="space-y-2.5">
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium text-slate-700 dark:text-slate-300">
+                  Hardware Fingerprint User ID (#) *
+                </label>
+                <div className="relative">
+                  <span className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400 font-mono text-sm">
+                    #
+                  </span>
+                  <input
+                    type="number"
+                    placeholder="Enter ID (e.g. 19, 34, 35)"
+                    value={biometricPunchBioIdInput}
+                    onChange={(e) => setBiometricPunchBioIdInput(e.target.value)}
+                    className="w-full pl-7 pr-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 text-sm font-mono outline-none focus:ring-2 focus:ring-purple-500"
+                  />
+                </div>
+              </div>
+
+              {/* Matched Member Card Preview */}
+              {(() => {
+                const cleanId = biometricPunchBioIdInput.trim();
+                if (!cleanId) return null;
+                const matched = members.find(m => m.biometricUserId === cleanId);
+                if (matched) {
+                  return (
+                    <div className="p-3 bg-emerald-50 dark:bg-emerald-950/40 rounded-xl border border-emerald-200 dark:border-emerald-800 flex items-center justify-between text-xs">
+                      <div>
+                        <p className="font-bold text-emerald-900 dark:text-emerald-200 text-xs flex items-center gap-1.5">
+                          <CheckCircle2 size={14} className="text-emerald-600" />
+                          Matched: {matched.name}
+                        </p>
+                        <p className="text-[10px] text-emerald-700 dark:text-emerald-300 mt-0.5">
+                          Member ID: {matched.id} • Mobile: {matched.mobile}
+                        </p>
+                      </div>
+                      <Badge variant="success">FP User #{cleanId}</Badge>
+                    </div>
+                  );
+                } else {
+                  return (
+                    <div className="p-2.5 bg-amber-50 dark:bg-amber-950/30 rounded-xl border border-amber-200 dark:border-amber-900 text-xs text-amber-800 dark:text-amber-300 flex items-center gap-1.5">
+                      <AlertCircle size={14} className="shrink-0" />
+                      <span>No gym member is mapped to Fingerprint User #{cleanId}.</span>
+                    </div>
+                  );
+                }
+              })()}
+            </div>
+          )}
+
+          {/* Date & Time Row */}
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-slate-700 dark:text-slate-300">Date</label>
+              <input
+                type="date"
+                value={biometricPunchDate}
+                onChange={(e) => setBiometricPunchDate(e.target.value)}
+                className="w-full px-3 py-1.5 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 text-xs outline-none"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-slate-700 dark:text-slate-300">Check-in Time</label>
+              <input
+                type="text"
+                value={biometricPunchTime}
+                onChange={(e) => setBiometricPunchTime(e.target.value)}
+                className="w-full px-3 py-1.5 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 text-xs outline-none"
+              />
+            </div>
+          </div>
+
+          {/* Big Action Button */}
+          <div className="pt-2">
+            <Button
+              type="submit"
+              disabled={isPunchingAnim}
+              className={`w-full py-2.5 text-xs font-bold rounded-xl text-white shadow-sm flex items-center justify-center gap-2 ${
+                isPunchingAnim 
+                  ? "bg-purple-800" 
+                  : "bg-purple-600 hover:bg-purple-700"
+              }`}
+            >
+              <Fingerprint size={16} className={isPunchingAnim ? "animate-pulse" : ""} />
+              {isPunchingAnim ? "Recording Fingerprint..." : "Record Fingerprint Attendance"}
+            </Button>
+          </div>
+
+          {/* Shortcut to Sync from Device */}
+          <div className="p-2.5 bg-slate-50 dark:bg-slate-800/40 rounded-xl border border-slate-200 dark:border-slate-700 flex items-center justify-between text-xs">
+            <span className="text-[11px] text-slate-500">Have hardware logs to import?</span>
+            <button
+              type="button"
+              disabled={isSyncing}
+              onClick={() => {
+                setIsBiometricPunchOpen(false);
+                handleSyncBiometric();
+              }}
+              className="text-blue-600 dark:text-blue-400 font-semibold text-xs hover:underline flex items-center gap-1"
+            >
+              <RefreshCw size={11} className={isSyncing ? "animate-spin" : ""} />
+              Load All from K20
+            </button>
+          </div>
+
+          <div className="flex justify-end pt-1">
+            <Button type="button" variant="ghost" onClick={() => setIsBiometricPunchOpen(false)}>
+              Cancel
+            </Button>
           </div>
         </form>
       </Modal>
