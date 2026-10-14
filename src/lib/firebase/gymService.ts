@@ -289,6 +289,7 @@ export interface BiometricDeviceSyncState {
   gymId: string;
   historicalBaselineEstablished: boolean;
   historicalBaselineLogCount: number;
+  lastKnownLogCount?: number;
   lastKnownUserSn: number;
   lastKnownRecordTime: string;
   lastKnownTxId: string;

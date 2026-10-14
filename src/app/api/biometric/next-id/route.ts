@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSanitizedDeviceSummary } from "@/lib/biometric/config";
 
-const BASELINE_K20_USERS = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "19", "30", "31", "32", "33"];
+const BASELINE_K20_USERS = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "19", "30", "31", "32", "33", "34", "35", "36", "37"];
 
 /**
  * GET /api/biometric/next-id
@@ -76,7 +76,7 @@ export async function GET(request: Request) {
       {
         success: false,
         error: errMessage,
-        nextBiometricUserId: "34", // Safe fallback
+        nextBiometricUserId: "38", // Safe fallback
       },
       { status: 500 }
     );

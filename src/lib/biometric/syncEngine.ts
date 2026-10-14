@@ -54,6 +54,7 @@ export function convertCheckpointToSyncState(
     gymId: checkpoint.gymId,
     historicalBaselineEstablished: true,
     historicalBaselineLogCount: checkpoint.lastKnownLogCount || 17356,
+    lastKnownLogCount: checkpoint.lastKnownLogCount || 17356,
     lastKnownUserSn: checkpoint.lastKnownUserSn || 18413,
     lastKnownRecordTime: checkpoint.lastKnownRecordTime || "2024-08-17T08:22:07.000Z",
     lastKnownTxId: checkpoint.lastKnownTxId || "",
@@ -246,14 +247,21 @@ export function formatTransactionDateTime(recordTime: Date | string): { date: st
   const d = typeof recordTime === "string" ? new Date(recordTime) : recordTime;
   if (!(d instanceof Date) || isNaN(d.getTime())) {
     const now = new Date();
+    const nowYear = now.getFullYear();
+    const nowMonth = String(now.getMonth() + 1).padStart(2, "0");
+    const nowDay = String(now.getDate()).padStart(2, "0");
     return {
-      date: now.toISOString().split("T")[0],
+      date: `${nowYear}-${nowMonth}-${nowDay}`,
       checkInTime: now.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: true }),
       iso: now.toISOString(),
     };
   }
 
-  const date = d.toISOString().split("T")[0];
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  const date = `${year}-${month}-${day}`;
+
   const checkInTime = d.toLocaleTimeString("en-IN", {
     hour: "2-digit",
     minute: "2-digit",

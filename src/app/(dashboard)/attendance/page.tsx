@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useApp } from "@/lib/context/AppContext";
 import { useAuth } from "@/lib/context/AuthContext";
 import { Button } from "@/components/ui/Button";
@@ -11,10 +11,12 @@ import { Modal } from "@/components/ui/Modal";
 import { Search, Fingerprint, Calendar as CalendarIcon, UserCheck, UserX, Clock, Users, ChevronLeft, ChevronRight, Download, RefreshCw, CheckCircle2, ShieldCheck, Sparkles, AlertCircle, Check, Radio, Zap } from "lucide-react";
 import { toast } from "sonner";
 import { subscribeToBiometricSyncState, type BiometricDeviceSyncState } from "@/lib/firebase/gymService";
+import { BiometricScanAttendanceModal } from "@/components/biometric/BiometricScanAttendanceModal";
+import { FingerprintEnrollModal } from "@/components/biometric/FingerprintEnrollModal";
 
 export default function AttendancePage() {
   const { user } = useAuth();
-  const { members, attendance, markAttendance, markBiometricAttendance, recordBulkBiometricAttendance, recordBiometricAttendance, activeGymId } = useApp();
+  const { members, attendance, markAttendance, markBiometricAttendance, recordBulkBiometricAttendance, recordBiometricAttendance, activeGymId, assignBiometricUser } = useApp();
   const [activeTab, setActiveTab] = useState<"daily" | "calendar">("daily");
 
   // Biometric device & sync state
@@ -73,20 +75,24 @@ export default function AttendancePage() {
     toast.success("Attendance report downloaded successfully!");
   };
   
+  const getTodayLocalDateStr = () => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  };
+
   const [search, setSearch] = useState("");
-  const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split("T")[0]);
+  const [selectedDate, setSelectedDate] = useState(getTodayLocalDateStr());
   const [isCheckInOpen, setIsCheckInOpen] = useState(false);
   const [checkInMemberId, setCheckInMemberId] = useState("");
   const [checkInStatus, setCheckInStatus] = useState<"Present" | "Absent">("Present");
 
-  // Biometric punch modal states
-  const [isBiometricPunchOpen, setIsBiometricPunchOpen] = useState(false);
-  const [biometricPunchMemberId, setBiometricPunchMemberId] = useState("");
-  const [biometricPunchBioIdInput, setBiometricPunchBioIdInput] = useState("");
-  const [biometricPunchDate, setBiometricPunchDate] = useState(new Date().toISOString().split("T")[0]);
-  const [biometricPunchTime, setBiometricPunchTime] = useState("");
-  const [biometricPunchMode, setBiometricPunchMode] = useState<"member" | "bioId">("member");
-  const [isPunchingAnim, setIsPunchingAnim] = useState(false);
+  // Biometric Real Hardware Scanner Modal States
+  const [isScanModalOpen, setIsScanModalOpen] = useState(false);
+  const [scanTargetMember, setScanTargetMember] = useState<(typeof members)[0] | null>(null);
+
+  // Biometric Enrollment Modal States (for members with no FP ID yet)
+  const [isEnrollModalOpen, setIsEnrollModalOpen] = useState(false);
+  const [enrollTargetMember, setEnrollTargetMember] = useState<(typeof members)[0] | null>(null);
 
   // Calendar specific state
   const [currentMonth, setCurrentMonth] = useState(new Date().getMonth());
@@ -96,12 +102,15 @@ export default function AttendancePage() {
 
   const [statusFilter, setStatusFilter] = useState<"all" | "present" | "absent">("all");
   const [isLiveListening, setIsLiveListening] = useState<boolean>(true);
+  const isSyncingRef = useRef<boolean>(false);
 
-  // Real-time live polling from eSSL K20 (every 12 seconds)
+  // Real-time live polling from eSSL K20 (every 20 seconds - pauses when scan modal is actively listening or sync in-flight)
   useEffect(() => {
-    if (!isLiveListening || activeTab !== "daily") return;
+    if (!isLiveListening || activeTab !== "daily" || isScanModalOpen) return;
 
     const interval = setInterval(async () => {
+      if (isSyncingRef.current) return;
+      isSyncingRef.current = true;
       try {
         const payload = {
           ownerId: user?.id || "owner_default",
@@ -133,11 +142,13 @@ export default function AttendancePage() {
         }
       } catch {
         // Silent background catch
+      } finally {
+        isSyncingRef.current = false;
       }
-    }, 12000);
+    }, 20000);
 
     return () => clearInterval(interval);
-  }, [isLiveListening, activeTab, user?.id, activeGymId, members, recordBulkBiometricAttendance, recordBiometricAttendance]);
+  }, [isLiveListening, activeTab, isScanModalOpen, user?.id, activeGymId, members, recordBulkBiometricAttendance, recordBiometricAttendance]);
 
   // Attendance lookup for selected date
   const attendanceMap = new Map<string, (typeof attendance)[0]>();
@@ -190,12 +201,29 @@ export default function AttendancePage() {
     return nameMatch || idMatch || bioIdMatch || mobileMatch;
   });
 
-  const handleQuickBiometricPunch = (memberId: string) => {
-    const mem = members.find((m) => m.id === memberId);
-    if (!mem) return;
-    const now = new Date();
-    const timeStr = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-    markBiometricAttendance(memberId, selectedDate, timeStr);
+  const openScanModalForMember = (member: (typeof members)[0]) => {
+    setScanTargetMember(member);
+    setIsScanModalOpen(true);
+  };
+
+  const openEnrollModalForMember = (member: (typeof members)[0]) => {
+    setEnrollTargetMember(member);
+    setIsEnrollModalOpen(true);
+  };
+
+  const handleEnrollSuccess = (newBioId: string) => {
+    if (enrollTargetMember) {
+      assignBiometricUser(enrollTargetMember.id, newBioId);
+      toast.success(`Fingerprint ID #${newBioId} mapped to ${enrollTargetMember.name}!`);
+      // Seamlessly open scan modal for immediate check-in
+      setScanTargetMember({ ...enrollTargetMember, biometricUserId: newBioId });
+      setIsScanModalOpen(true);
+      setEnrollTargetMember(null);
+    }
+  };
+
+  const handleScanAttendanceSuccess = (member: (typeof members)[0], timeStr: string) => {
+    markBiometricAttendance(member.id, selectedDate, timeStr);
   };
 
   const handleQuickToggleAttendance = (memberId: string, currentStatus: "Present" | "Absent") => {
@@ -210,49 +238,6 @@ export default function AttendancePage() {
     setIsCheckInOpen(false);
     setCheckInMemberId("");
     setCheckInStatus("Present");
-  };
-
-  const openBiometricPunchModal = () => {
-    const now = new Date();
-    const timeStr = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-    setBiometricPunchTime(timeStr);
-    setBiometricPunchDate(selectedDate || new Date().toISOString().split("T")[0]);
-    setIsBiometricPunchOpen(true);
-  };
-
-  const handleBiometricPunch = (e: React.FormEvent) => {
-    e.preventDefault();
-    let targetMember: (typeof members)[0] | undefined;
-
-    if (biometricPunchMode === "bioId") {
-      const cleanId = biometricPunchBioIdInput.trim();
-      if (!cleanId) {
-        toast.error("Please enter a Biometric Hardware User ID (e.g. 19, 34, 35)");
-        return;
-      }
-      targetMember = members.find((m) => m.biometricUserId === cleanId);
-      if (!targetMember) {
-        toast.error(`No registered member mapped to Fingerprint User ID #${cleanId}. Please check member profile.`);
-        return;
-      }
-    } else {
-      if (!biometricPunchMemberId) {
-        toast.error("Please select a gym member to punch attendance.");
-        return;
-      }
-      targetMember = members.find((m) => m.id === biometricPunchMemberId);
-    }
-
-    if (!targetMember) return;
-
-    setIsPunchingAnim(true);
-    setTimeout(() => {
-      markBiometricAttendance(targetMember.id, biometricPunchDate, biometricPunchTime);
-      setIsPunchingAnim(false);
-      setIsBiometricPunchOpen(false);
-      setBiometricPunchMemberId("");
-      setBiometricPunchBioIdInput("");
-    }, 350);
   };
 
   const checkDeviceDiagnostics = async () => {
@@ -284,6 +269,11 @@ export default function AttendancePage() {
   };
 
   const handleSyncBiometric = async () => {
+    if (isSyncingRef.current) {
+      toast.info("Biometric sync already in progress. Please wait a moment.");
+      return;
+    }
+    isSyncingRef.current = true;
     setIsSyncing(true);
     try {
       const payload = {
@@ -311,6 +301,11 @@ export default function AttendancePage() {
         return;
       }
 
+      if (data.busy) {
+        toast.info(data.message || "Terminal is busy with another scan. Please try again.");
+        return;
+      }
+
       if (data.recordsWritten > 0) {
         if (Array.isArray(data.attendanceRecords) && data.attendanceRecords.length > 0) {
           recordBulkBiometricAttendance(data.attendanceRecords);
@@ -327,6 +322,7 @@ export default function AttendancePage() {
       toast.error(`Sync error: ${msg}`);
     } finally {
       setIsSyncing(false);
+      isSyncingRef.current = false;
     }
   };
 
@@ -448,10 +444,14 @@ export default function AttendancePage() {
             <span>Live Scanner: {isLiveListening ? "Active (12s)" : "Paused"}</span>
           </button>
           <Button 
-            onClick={openBiometricPunchModal} 
+            onClick={() => {
+              setScanTargetMember(null);
+              setIsScanModalOpen(true);
+            }} 
             className="gap-1.5 bg-purple-600 hover:bg-purple-700 text-white text-xs font-semibold shadow-xs"
+            title="Open real-time K20 biometric scanner to take attendance"
           >
-            <Fingerprint size={14} /> Biometric Punch
+            <Fingerprint size={14} /> Scan Fingerprint Attendance
           </Button>
           <Button 
             onClick={handleSyncBiometric} 
@@ -714,20 +714,32 @@ export default function AttendancePage() {
                             <div className="flex items-center justify-end gap-1.5">
                               {item.status === "Absent" ? (
                                 <>
-                                  <Button
-                                    size="sm"
-                                    onClick={() => handleQuickBiometricPunch(item.member.id)}
-                                    className="h-7 text-xs px-2.5 bg-purple-600 hover:bg-purple-700 text-white font-semibold gap-1 shadow-xs"
-                                    title="Record biometric fingerprint punch for this member"
-                                  >
-                                    <Fingerprint size={12} /> Punch FP
-                                  </Button>
+                                  {item.biometricUserId ? (
+                                    <Button
+                                      size="sm"
+                                      onClick={() => openScanModalForMember(item.member)}
+                                      className="h-7 text-xs px-2.5 bg-purple-600 hover:bg-purple-700 text-white font-semibold gap-1 shadow-xs"
+                                      title={`Scan fingerprint on K20 terminal for ${item.member.name} (FP #${item.biometricUserId})`}
+                                    >
+                                      <Fingerprint size={12} /> Scan Fingerprint
+                                    </Button>
+                                  ) : (
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      onClick={() => openEnrollModalForMember(item.member)}
+                                      className="h-7 text-xs px-2 border-amber-300 text-amber-700 hover:bg-amber-50 dark:border-amber-800 dark:text-amber-300 font-semibold gap-1"
+                                      title="Member has no fingerprint enrolled. Click to enroll on K20."
+                                    >
+                                      <Fingerprint size={12} /> Enroll FP First
+                                    </Button>
+                                  )}
                                   <button
                                     onClick={() => handleQuickToggleAttendance(item.member.id, "Absent")}
                                     className="h-7 text-[11px] px-2 rounded-lg border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-                                    title="Mark Present manually"
+                                    title="Mark Present manually (without fingerprint scan)"
                                   >
-                                    Present
+                                    Manual Roll
                                   </button>
                                 </>
                               ) : (
@@ -812,11 +824,14 @@ export default function AttendancePage() {
 
                 <div className="space-y-2 pt-1">
                   <Button 
-                    onClick={openBiometricPunchModal} 
+                    onClick={() => {
+                      setScanTargetMember(null);
+                      setIsScanModalOpen(true);
+                    }} 
                     className="w-full bg-purple-600 hover:bg-purple-700 text-white text-xs gap-2 py-2.5 shadow-sm font-semibold"
                   >
                     <Fingerprint size={15} />
-                    Biometric Fingerprint Punch
+                    Scan Fingerprint Attendance
                   </Button>
 
                   <Button 
@@ -982,210 +997,30 @@ export default function AttendancePage() {
         </form>
       </Modal>
 
-      {/* Biometric Fingerprint Attendance Modal */}
-      <Modal 
-        isOpen={isBiometricPunchOpen} 
-        onClose={() => setIsBiometricPunchOpen(false)} 
-        title="Biometric Fingerprint Attendance"
-      >
-        <form onSubmit={handleBiometricPunch} className="space-y-4">
-          <p className="text-xs text-slate-500 dark:text-slate-400">
-            Record biometric fingerprint check-in for an existing gym member. The punch will instantly update the roll call.
-          </p>
+      {/* Real Hardware Biometric Scan Attendance Modal */}
+      <BiometricScanAttendanceModal
+        isOpen={isScanModalOpen}
+        onClose={() => {
+          setIsScanModalOpen(false);
+          setScanTargetMember(null);
+        }}
+        targetMember={scanTargetMember}
+        allMembers={members}
+        onSuccess={handleScanAttendanceSuccess}
+        onOpenEnrollModal={openEnrollModalForMember}
+        onManualPresent={(memberId) => markAttendance(memberId, "Present", selectedDate)}
+      />
 
-          {/* Mode Switch Tabs */}
-          <div className="flex p-1 bg-slate-100 dark:bg-slate-800 rounded-xl text-xs font-semibold">
-            <button
-              type="button"
-              onClick={() => setBiometricPunchMode("member")}
-              className={`flex-1 py-1.5 rounded-lg transition-all flex items-center justify-center gap-1.5 ${
-                biometricPunchMode === "member"
-                  ? "bg-white dark:bg-slate-900 text-purple-700 dark:text-purple-300 shadow-xs font-bold"
-                  : "text-slate-500 hover:text-slate-800 dark:hover:text-slate-200"
-              }`}
-            >
-              <Users size={13} />
-              Select Existing Member
-            </button>
-            <button
-              type="button"
-              onClick={() => setBiometricPunchMode("bioId")}
-              className={`flex-1 py-1.5 rounded-lg transition-all flex items-center justify-center gap-1.5 ${
-                biometricPunchMode === "bioId"
-                  ? "bg-white dark:bg-slate-900 text-purple-700 dark:text-purple-300 shadow-xs font-bold"
-                  : "text-slate-500 hover:text-slate-800 dark:hover:text-slate-200"
-              }`}
-            >
-              <Fingerprint size={13} />
-              Punch by Fingerprint ID (#)
-            </button>
-          </div>
-
-          {biometricPunchMode === "member" ? (
-            <div className="space-y-2.5">
-              <div className="space-y-1.5">
-                <label className="text-sm font-medium text-slate-700 dark:text-slate-300">
-                  Gym Member *
-                </label>
-                <select 
-                  required 
-                  value={biometricPunchMemberId} 
-                  onChange={(e) => setBiometricPunchMemberId(e.target.value)} 
-                  className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 text-sm outline-none focus:ring-2 focus:ring-purple-500"
-                >
-                  <option value="">-- Select Member --</option>
-                  {members.map(m => (
-                    <option key={m.id} value={m.id}>
-                      {m.name} ({m.id}) {m.biometricUserId ? `• FP #${m.biometricUserId}` : "• (No FP ID)"}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              {/* Selected Member Preview Card */}
-              {(() => {
-                const sel = members.find(m => m.id === biometricPunchMemberId);
-                if (!sel) return null;
-                return (
-                  <div className="p-3 bg-purple-50/70 dark:bg-purple-950/30 rounded-xl border border-purple-200 dark:border-purple-800/60 flex items-center justify-between text-xs">
-                    <div className="flex items-center gap-2.5">
-                      <div className="w-8 h-8 rounded-full bg-purple-100 dark:bg-purple-900/60 text-purple-700 dark:text-purple-300 flex items-center justify-center font-bold text-xs">
-                        {sel.name.slice(0, 2).toUpperCase()}
-                      </div>
-                      <div>
-                        <p className="font-bold text-slate-800 dark:text-slate-100 text-xs">{sel.name}</p>
-                        <p className="text-[10px] text-slate-500">
-                          {sel.mobile} • Status: {sel.status}
-                        </p>
-                      </div>
-                    </div>
-                    {sel.biometricUserId ? (
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-purple-100 text-purple-800 border border-purple-200 dark:bg-purple-950 dark:text-purple-300 dark:border-purple-800">
-                        <Fingerprint size={12} /> FP #{sel.biometricUserId}
-                      </span>
-                    ) : (
-                      <span className="text-[10px] text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/50 px-2 py-0.5 rounded border border-amber-200 dark:border-amber-900">
-                        Fingerprint Punch
-                      </span>
-                    )}
-                  </div>
-                );
-              })()}
-            </div>
-          ) : (
-            <div className="space-y-2.5">
-              <div className="space-y-1.5">
-                <label className="text-sm font-medium text-slate-700 dark:text-slate-300">
-                  Hardware Fingerprint User ID (#) *
-                </label>
-                <div className="relative">
-                  <span className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400 font-mono text-sm">
-                    #
-                  </span>
-                  <input
-                    type="number"
-                    placeholder="Enter ID (e.g. 19, 34, 35)"
-                    value={biometricPunchBioIdInput}
-                    onChange={(e) => setBiometricPunchBioIdInput(e.target.value)}
-                    className="w-full pl-7 pr-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 text-sm font-mono outline-none focus:ring-2 focus:ring-purple-500"
-                  />
-                </div>
-              </div>
-
-              {/* Matched Member Card Preview */}
-              {(() => {
-                const cleanId = biometricPunchBioIdInput.trim();
-                if (!cleanId) return null;
-                const matched = members.find(m => m.biometricUserId === cleanId);
-                if (matched) {
-                  return (
-                    <div className="p-3 bg-emerald-50 dark:bg-emerald-950/40 rounded-xl border border-emerald-200 dark:border-emerald-800 flex items-center justify-between text-xs">
-                      <div>
-                        <p className="font-bold text-emerald-900 dark:text-emerald-200 text-xs flex items-center gap-1.5">
-                          <CheckCircle2 size={14} className="text-emerald-600" />
-                          Matched: {matched.name}
-                        </p>
-                        <p className="text-[10px] text-emerald-700 dark:text-emerald-300 mt-0.5">
-                          Member ID: {matched.id} • Mobile: {matched.mobile}
-                        </p>
-                      </div>
-                      <Badge variant="success">FP User #{cleanId}</Badge>
-                    </div>
-                  );
-                } else {
-                  return (
-                    <div className="p-2.5 bg-amber-50 dark:bg-amber-950/30 rounded-xl border border-amber-200 dark:border-amber-900 text-xs text-amber-800 dark:text-amber-300 flex items-center gap-1.5">
-                      <AlertCircle size={14} className="shrink-0" />
-                      <span>No gym member is mapped to Fingerprint User #{cleanId}.</span>
-                    </div>
-                  );
-                }
-              })()}
-            </div>
-          )}
-
-          {/* Date & Time Row */}
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <label className="text-xs font-medium text-slate-700 dark:text-slate-300">Date</label>
-              <input
-                type="date"
-                value={biometricPunchDate}
-                onChange={(e) => setBiometricPunchDate(e.target.value)}
-                className="w-full px-3 py-1.5 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 text-xs outline-none"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-xs font-medium text-slate-700 dark:text-slate-300">Check-in Time</label>
-              <input
-                type="text"
-                value={biometricPunchTime}
-                onChange={(e) => setBiometricPunchTime(e.target.value)}
-                className="w-full px-3 py-1.5 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 text-xs outline-none"
-              />
-            </div>
-          </div>
-
-          {/* Big Action Button */}
-          <div className="pt-2">
-            <Button
-              type="submit"
-              disabled={isPunchingAnim}
-              className={`w-full py-2.5 text-xs font-bold rounded-xl text-white shadow-sm flex items-center justify-center gap-2 ${
-                isPunchingAnim 
-                  ? "bg-purple-800" 
-                  : "bg-purple-600 hover:bg-purple-700"
-              }`}
-            >
-              <Fingerprint size={16} className={isPunchingAnim ? "animate-pulse" : ""} />
-              {isPunchingAnim ? "Recording Fingerprint..." : "Record Fingerprint Attendance"}
-            </Button>
-          </div>
-
-          {/* Shortcut to Sync from Device */}
-          <div className="p-2.5 bg-slate-50 dark:bg-slate-800/40 rounded-xl border border-slate-200 dark:border-slate-700 flex items-center justify-between text-xs">
-            <span className="text-[11px] text-slate-500">Have hardware logs to import?</span>
-            <button
-              type="button"
-              disabled={isSyncing}
-              onClick={() => {
-                setIsBiometricPunchOpen(false);
-                handleSyncBiometric();
-              }}
-              className="text-blue-600 dark:text-blue-400 font-semibold text-xs hover:underline flex items-center gap-1"
-            >
-              <RefreshCw size={11} className={isSyncing ? "animate-spin" : ""} />
-              Load All from K20
-            </button>
-          </div>
-
-          <div className="flex justify-end pt-1">
-            <Button type="button" variant="ghost" onClick={() => setIsBiometricPunchOpen(false)}>
-              Cancel
-            </Button>
-          </div>
-        </form>
-      </Modal>
+      {/* Biometric Fingerprint Enrollment Modal (for un-enrolled members) */}
+      <FingerprintEnrollModal
+        isOpen={isEnrollModalOpen}
+        onClose={() => {
+          setIsEnrollModalOpen(false);
+          setEnrollTargetMember(null);
+        }}
+        memberName={enrollTargetMember?.name || "New Member"}
+        onSuccess={handleEnrollSuccess}
+      />
 
       {/* Selected Day Events Modal */}
       <Modal 

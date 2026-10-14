@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSanitizedDeviceSummary } from "@/lib/biometric/config";
+import { deviceMutex } from "@/lib/biometric/deviceMutex";
 import { 
   generateDeterministicTxId, 
   formatTransactionDateTime,
@@ -65,13 +66,25 @@ function saveLocalCheckpointBackup(checkpoint: SyncCheckpoint): void {
  * Baseline members list if none passed in request body
  */
 const DEFAULT_MEMBERS = [
-  { id: "M-1019", name: "Rahul Sharma", biometricUserId: "19", status: "Active" },
-  { id: "M-1034", name: "New Member 34", biometricUserId: "34", status: "Active" },
-  { id: "M-1035", name: "New Member 35", biometricUserId: "35", status: "Active" },
-  { id: "M-1006", name: "Naresh Chimalwar", biometricUserId: "6", status: "Active" },
-  { id: "M-1033", name: "Payal Chandanbawane", biometricUserId: "33", status: "Active" },
+  { id: "M-1001", name: "Jayshri Gawale", biometricUserId: "1", status: "Active" },
+  { id: "M-1002", name: "Karina Madavi", biometricUserId: "2", status: "Active" },
   { id: "M-1003", name: "Rahul Tiranagam", biometricUserId: "3", status: "Active" },
+  { id: "M-1004", name: "Shilpa Madavi", biometricUserId: "4", status: "Active" },
+  { id: "M-1005", name: "Manda Halami", biometricUserId: "5", status: "Active" },
+  { id: "M-1006", name: "Naresh Chimalwar", biometricUserId: "6", status: "Active" },
+  { id: "M-1007", name: "Ashwini Rapanji", biometricUserId: "7", status: "Active" },
+  { id: "M-1008", name: "Sunanda", biometricUserId: "8", status: "Active" },
   { id: "M-1009", name: "Puja Chandanbawane", biometricUserId: "9", status: "Active" },
+  { id: "M-1010", name: "Member 10", biometricUserId: "10", status: "Active" },
+  { id: "M-1019", name: "Rahul Sharma", biometricUserId: "19", status: "Active" },
+  { id: "M-1030", name: "Sabir Khan", biometricUserId: "30", status: "Active" },
+  { id: "M-1031", name: "Moni Pada", biometricUserId: "31", status: "Active" },
+  { id: "M-1032", name: "Vijay Tirangam", biometricUserId: "32", status: "Active" },
+  { id: "M-1033", name: "Payal Chandanbawane", biometricUserId: "33", status: "Active" },
+  { id: "M-1034", name: "Member 34", biometricUserId: "34", status: "Active" },
+  { id: "M-1035", name: "Member 35", biometricUserId: "35", status: "Active" },
+  { id: "M-1036", name: "Member 36", biometricUserId: "36", status: "Active" },
+  { id: "M-1037", name: "Member 37", biometricUserId: "37", status: "Active" },
 ];
 
 /**
@@ -95,7 +108,16 @@ export async function POST(request: Request) {
     const maxRecords = body.maxRecords !== undefined ? Number(body.maxRecords) : 100; // Default to 100 to sync all daily attendance records
     const deviceId = `K20-${summary.deviceIp}:${summary.devicePort}`;
     const safeDocId = getSafeDeviceDocId(deviceId);
-    const membersList = Array.isArray(body.members) && body.members.length > 0 ? body.members : DEFAULT_MEMBERS;
+    const firestoreSyncStatePath = `gyms/${gymId}/biometricDevices/${safeDocId}`;
+
+    // Combine any client-provided members with known enrolled members from K20 hardware
+    const effectiveMembers: any[] = Array.isArray(body.members) && body.members.length > 0 ? [...body.members] : [];
+    for (const def of DEFAULT_MEMBERS) {
+      if (!effectiveMembers.some((m) => String(m.biometricUserId).trim() === def.biometricUserId)) {
+        effectiveMembers.push(def);
+      }
+    }
+    const membersList = effectiveMembers;
 
     // 1. Fetch persistent Firestore sync state (Source of Truth)
     let syncState = await getBiometricSyncState(gymId, deviceId);
@@ -131,22 +153,116 @@ export async function POST(request: Request) {
         ip: l.ip || summary.deviceIp,
       }));
     } else if (typeof process !== "undefined" && process.versions?.node && summary.isConfigured && summary.deviceIp) {
+      // 2A. Acquire singleton device mutex (prevents socket collisions with scan-attendance and parallel polls)
+      let releaseLock: (() => void) | null = null;
+      try {
+        releaseLock = await deviceMutex.acquire(4000);
+      } catch {
+        return NextResponse.json({
+          success: true,
+          busy: true,
+          recordsWritten: 0,
+          summary: {
+            totalLogsOnDevice: 0,
+            historicalIgnoredCount: syncState.historicalBaselineLogCount,
+            alreadySyncedCount: 0,
+            unmappedCount: 0,
+            newMappedDetected: 0,
+            recordsWritten: 0,
+          },
+          message: "K20 terminal is currently busy with another operation. Sync will retry automatically.",
+        });
+      }
+
       // eslint-disable-next-line @typescript-eslint/no-implied-eval
       const dynamicRequire = eval("require");
       const ZKLib = dynamicRequire("node-zklib");
+      const zk = new ZKLib(summary.deviceIp, summary.devicePort, 15000);
 
-      const zk = new ZKLib(summary.deviceIp, summary.devicePort, 5000);
-      await zk.createSocket();
-      const logsResult = await zk.getAttendances();
-      if (logsResult && logsResult.data && Array.isArray(logsResult.data)) {
-        rawLogs = logsResult.data.map((l: any) => ({
-          userSn: Number(l.userSn || 0),
-          deviceUserId: String(l.deviceUserId || l.userId || ""),
-          recordTime: l.recordTime,
-          ip: l.ip || summary.deviceIp,
-        }));
+      try {
+        await zk.createSocket();
+
+        // 2B. Ultra-fast metadata check (~50-80ms): verify if device has any new logs beyond watermark
+        const info = await zk.getInfo().catch(() => null);
+        const lastKnownCount = syncState.lastKnownLogCount || syncState.historicalBaselineLogCount || 0;
+        const forceFullSync = Boolean(body.forceRefresh || (syncState.lastKnownUserSn && syncState.lastKnownUserSn <= 18421));
+
+        if (!forceFullSync && info && typeof info.logCounts === "number" && info.logCounts <= lastKnownCount && (syncState.lastKnownUserSn || 0) >= 18440) {
+          // Terminal has no new logs recorded; avoid downloading 17,000+ records
+          await zk.disconnect().catch(() => {});
+          if (releaseLock) {
+            releaseLock();
+            releaseLock = null;
+          }
+
+          syncState.lastSyncAt = new Date().toISOString();
+          syncState.lastKnownLogCount = info.logCounts;
+          await saveBiometricSyncState(gymId, syncState);
+
+          const localBackup = loadLocalCheckpoint(ownerId, gymId, deviceId);
+          if (localBackup) {
+            localBackup.lastKnownLogCount = info.logCounts;
+            localBackup.lastSyncedAt = syncState.lastSyncAt;
+            saveLocalCheckpointBackup(localBackup);
+          }
+
+          return NextResponse.json({
+            success: true,
+            dryRun: false,
+            upToDate: true,
+            sourceOfTruth: "FIRESTORE_PERSISTENT",
+            firestoreSyncStatePath,
+            recordsWritten: 0,
+            duplicateDetected: true,
+            unmappedTransactions: [],
+            summary: {
+              totalLogsOnDevice: info.logCounts,
+              historicalIgnoredCount: lastKnownCount,
+              alreadySyncedCount: 0,
+              unmappedCount: 0,
+              newMappedDetected: 0,
+              recordsWritten: 0,
+            },
+            syncState,
+            migratedFromLocal,
+            message: "Terminal attendance logs are up to date.",
+          });
+        }
+
+        // 2C. New logs detected on device (or metadata info query unavailable)
+        const logsResult = await zk.getAttendances();
+        if (logsResult && logsResult.data && Array.isArray(logsResult.data)) {
+          rawLogs = logsResult.data.map((l: any) => ({
+            userSn: Number(l.userSn || 0),
+            deviceUserId: String(l.deviceUserId || l.userId || ""),
+            recordTime: l.recordTime,
+            ip: l.ip || summary.deviceIp,
+          }));
+        }
+
+        if (info && typeof info.logCounts === "number") {
+          syncState.lastKnownLogCount = info.logCounts;
+        } else if (rawLogs.length > 0) {
+          syncState.lastKnownLogCount = rawLogs.length;
+        }
+
+        await zk.disconnect().catch(() => {});
+      } catch (err: any) {
+        console.error("[SyncLive] Terminal communication notice:", err?.message || err);
+        return NextResponse.json(
+          {
+            success: false,
+            recordsWritten: 0,
+            error: `Could not connect to K20 terminal (${summary.deviceIp}:${summary.devicePort}): ${err?.message || "Socket timeout"}`,
+          },
+          { status: 503 }
+        );
+      } finally {
+        if (releaseLock) {
+          releaseLock();
+          releaseLock = null;
+        }
       }
-      await zk.disconnect();
     }
 
     // 3. Incrementally evaluate logs against Firestore Sync State
@@ -177,6 +293,26 @@ export async function POST(request: Request) {
           timestamp: evaluation.recordTime,
           reason: evaluation.reason,
         });
+
+        // Ensure physical punches are never lost: auto-create attendance candidate
+        const autoMember = {
+          id: `M-BIO-${evaluation.deviceUserId}`,
+          name: `Member #${evaluation.deviceUserId}`,
+          biometricUserId: evaluation.deviceUserId,
+          status: "Active" as const,
+        };
+
+        const docExists = await isAttendanceDocExists(gymId, evaluation.transactionId);
+        if (!docExists) {
+          newCandidates.push({
+            log,
+            txId: evaluation.transactionId,
+            member: autoMember,
+            date: evaluation.date,
+            checkInTime: evaluation.checkInTime,
+            iso: evaluation.recordTime,
+          });
+        }
         continue;
       }
 
@@ -201,8 +337,6 @@ export async function POST(request: Request) {
     }
 
     // 4. Handle Dry-Run Mode (0 writes)
-    const firestoreSyncStatePath = `gyms/${gymId}/biometricDevices/${safeDocId}`;
-
     if (dryRun) {
       return NextResponse.json({
         success: true,
@@ -284,6 +418,9 @@ export async function POST(request: Request) {
         localBackup.lastKnownRecordTime = syncState.lastKnownRecordTime;
         localBackup.lastKnownTxId = syncState.lastKnownTxId;
         localBackup.lastSyncedAt = syncState.lastSyncAt;
+        if (syncState.lastKnownLogCount) {
+          localBackup.lastKnownLogCount = syncState.lastKnownLogCount;
+        }
         if (!localBackup.processedTxIds.includes(candidate.txId)) {
           localBackup.processedTxIds.push(candidate.txId);
         }
@@ -293,6 +430,23 @@ export async function POST(request: Request) {
 
     if (writtenRecords.length > 0) {
       await saveBiometricSyncState(gymId, syncState);
+
+      // Persist to local backup records file
+      try {
+        const liveRecordsPath = path.join(CHECKPOINT_DIR, "live_attendance_records.json");
+        let existingRecords: any[] = [];
+        if (fs.existsSync(liveRecordsPath)) {
+          existingRecords = JSON.parse(fs.readFileSync(liveRecordsPath, "utf-8"));
+        }
+        for (const rec of writtenRecords) {
+          if (!existingRecords.some((r: any) => r.transactionId === rec.transactionId)) {
+            existingRecords.push(rec);
+          }
+        }
+        fs.writeFileSync(liveRecordsPath, JSON.stringify(existingRecords, null, 2), "utf-8");
+      } catch (e) {
+        console.warn("Notice updating live_attendance_records.json:", e);
+      }
 
       return NextResponse.json({
         success: true,
@@ -320,6 +474,15 @@ export async function POST(request: Request) {
       // Update lastSyncAt on sync state even when 0 new records were written
       syncState.lastSyncAt = new Date().toISOString();
       await saveBiometricSyncState(gymId, syncState);
+
+      const localBackup = loadLocalCheckpoint(ownerId, gymId, deviceId);
+      if (localBackup) {
+        if (syncState.lastKnownLogCount) {
+          localBackup.lastKnownLogCount = syncState.lastKnownLogCount;
+        }
+        localBackup.lastSyncedAt = syncState.lastSyncAt;
+        saveLocalCheckpointBackup(localBackup);
+      }
 
       return NextResponse.json({
         success: true,

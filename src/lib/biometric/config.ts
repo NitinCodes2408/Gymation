@@ -25,20 +25,11 @@ export function getBiometricDeviceConfig(): {
   isConfigured: boolean;
   validationError?: string;
 } {
-  const ip = process.env.BIOMETRIC_DEVICE_IP?.trim();
-  const rawPort = process.env.BIOMETRIC_DEVICE_PORT?.trim();
-  const rawDeviceId = process.env.BIOMETRIC_DEVICE_ID?.trim();
+  const ip = process.env.BIOMETRIC_DEVICE_IP?.trim() || "192.168.1.200";
+  const rawPort = process.env.BIOMETRIC_DEVICE_PORT?.trim() || "4370";
+  const rawDeviceId = process.env.BIOMETRIC_DEVICE_ID?.trim() || "1";
   const serial = process.env.BIOMETRIC_DEVICE_SERIAL?.trim();
-  const commKey = process.env.BIOMETRIC_COMM_KEY?.trim();
-
-  // Validate required parameters
-  if (!ip) {
-    return {
-      config: null,
-      isConfigured: false,
-      validationError: "BIOMETRIC_DEVICE_IP environment variable is missing.",
-    };
-  }
+  const commKey = process.env.BIOMETRIC_COMM_KEY?.trim() || "0";
 
   // Basic IP format check (IPv4)
   const ipRegex = /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;

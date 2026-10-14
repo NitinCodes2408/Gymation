@@ -1097,9 +1097,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     toast.success(`Expense "${expenseTitle}" removed.`);
   };
 
+  // Helper for standard local calendar date (YYYY-MM-DD)
+  const getLocalTodayStr = () => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  };
+
   // Attendance API — saves exclusively to active gym
   const markAttendance = (memberId: string, status: "Present" | "Absent", date?: string) => {
-    const recordDate = date || new Date().toISOString().split("T")[0];
+    const recordDate = date || getLocalTodayStr();
     const member = members.find((m) => m.id === memberId);
     if (!member) return;
 
@@ -1180,7 +1186,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { success: false, error: "Member not found." };
     }
 
-    const recordDate = date || new Date().toISOString().split("T")[0];
+    const recordDate = date || getLocalTodayStr();
     const now = new Date();
     const timeStr = checkInTime || now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     const txId = `BIO_${member.id}_${recordDate}_${Date.now()}`;
